@@ -55,6 +55,7 @@ const ENGINE_CONFIG = {
   loadExtendedSelectors: false, // procedural selectors: the preload cannot run them
   enableHtmlFiltering: false,
   enableMutationObserver: true,
+  integrityCheck: true, // the CRC that lets loadCached() reject a damaged cache
 };
 
 // Only network schemes reach the handlers (supernova://, file://, data:,
@@ -320,6 +321,10 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
       const file = cacheFile(variant);
       const [buf, stat] = await Promise.all([fsp.readFile(file), fsp.stat(file)]);
       const engine = FiltersEngine.deserialize(buf); // throws on version/CRC mismatch
+      // A file cut short a few bytes after the version deserializes without
+      // an error into an empty engine whose config says "no CRC". Ours are
+      // always written with the CRC on, so that is a damaged file.
+      if (engine.config.integrityCheck !== true) throw new Error('damaged engine cache');
       engine.updateEnv(makeEnv());
       if (variant !== variantWanted()) return false;
       install(engine, variant, stat.mtimeMs, 'cache', buf.length);
