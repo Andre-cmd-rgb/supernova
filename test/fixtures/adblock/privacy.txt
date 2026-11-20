@@ -1,0 +1,2 @@
+! Supernova test list: privacy
+||metrics.example^$third-party

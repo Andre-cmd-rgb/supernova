@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    { "name": "google-analytics_ga.js", "aliases": ["google-analytics.com/ga.js"], "body": "(function(){window.ga=function(){};})();", "contentType": "application/javascript" },
+    { "name": "1x1.gif", "aliases": ["1x1-transparent.gif"], "body": "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "contentType": "image/gif;base64" }
+  ],
+  "scriptlets": [
+    { "name": "set-constant.js", "aliases": ["set-constant"], "body": "function setConstant(name, value) { window.__snSetConstant = [name, value]; }", "dependencies": [], "executionWorld": "MAIN" }
+  ]
+}

@@ -1,0 +1,23 @@
+! Supernova test list: ads (served by the fake fetch in test/adblock.test.js)
+||ads.example^
+@@||ads.example/allowed.js$script
+||tracker.example^$third-party
+||selfads.example^$1p
+! hosts-style entry first, as in the real lists: engine.match() returns it, not the $document one
+||evil.example^
+||evil.example^$document
+||phish.example^$doc,subdocument
+@@||phish.example/help/$document
+/sponsored/$~xhr
+||analytics.example/ga.js$script,redirect=google-analytics_ga.js
+||pixel.example^$image,redirect=1x1.gif
+||csp.example^$csp=worker-src 'none'
+!#if env_chromium
+||chromium-only.example^
+!#endif
+!#if env_firefox
+||firefox-only.example^
+!#endif
+news.example##.ad-banner
+news.example##+js(set-constant, adsEnabled, false)
+##.generic-ad

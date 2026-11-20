@@ -1,0 +1,3 @@
+! Supernova test list: annoyances (only in the "full" variant, adblock.cookieBanners)
+||cookie-banner.example^
+news.example##.cookie-notice
