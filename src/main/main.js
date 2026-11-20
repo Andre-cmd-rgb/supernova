@@ -618,4 +618,38 @@ app.whenReady().then(async () => {
   // updates it in the background; nothing waits for it.
   try { if (electron.components) electron.components.whenReady().catch(() => {}); } catch {}
   if (process.env.SUPERNOVA_TIMING) console.log(`supernova: ready in ${Date.now() - t0} ms after app ready`);
+  if (process.env.SUPERNOVA_SMOKE === '1') smokeTest();
 });
+
+// SUPERNOVA_SMOKE=1 (CI, packaging checks): start, open the settings page,
+// check that the bundled page preload and the internal API answer there and
+// that the browser UI loaded, print one line and quit with 0, or 1 on failure.
+async function smokeTest() {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const fail = (why) => { console.log(`supernova: smoke FAILED ${why}`); app.exit(1); };
+  const timer = setTimeout(() => fail('timeout'), Number(process.env.SUPERNOVA_SMOKE_TIMEOUT_MS) || 30000);
+  try {
+    const w = [...windows][0];
+    if (!w) return fail('no window');
+    ctx.openSettings(w);
+    const wc = w.active && w.active.webContents;
+    if (!wc) return fail('no settings tab');
+    let info = null;
+    for (let i = 0; i < 100 && !info; i++) {
+      await sleep(100);
+      if (wc.isLoading()) continue;
+      info = await wc.executeJavaScript('window.supernova ? window.supernova.invoke("info") : null').catch(() => null);
+    }
+    if (!info) return fail('settings page: no internal API (page preload missing?)');
+    const ui = await w.ui.webContents.executeJavaScript('document.readyState + " " + !!window.sn');
+    if (ui !== 'complete true') return fail(`browser UI: ${ui}`);
+    clearTimeout(timer);
+    console.log(`supernova: smoke ok ${JSON.stringify({
+      version: info.version, electron: info.electron, chrome: info.chrome, vault: info.vault && info.vault.backend,
+      media: info.media, services: Object.keys(services).filter((k) => services[k]),
+    })}`);
+    app.exit(0);
+  } catch (err) {
+    fail(err.message);
+  }
+}

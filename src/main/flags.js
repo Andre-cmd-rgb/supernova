@@ -11,9 +11,10 @@ function integratedRenderNode() {
     for (const name of fs.readdirSync('/sys/class/drm')) {
       if (!/^renderD\d+$/.test(name)) continue;
       const vendor = fs.readFileSync(`/sys/class/drm/${name}/device/vendor`, 'utf8').trim();
-      // Intel (0x8086) or AMD (0x1002) integrated graphics; never NVIDIA (0x10de).
+      // Intel (0x8086) first: on a hybrid laptop that is the integrated GPU.
       if (vendor === '0x8086') return `/dev/dri/${name}`;
     }
+    // Otherwise any GPU that is not NVIDIA's (an AMD APU, say).
     for (const name of fs.readdirSync('/sys/class/drm')) {
       if (!/^renderD\d+$/.test(name)) continue;
       const vendor = fs.readFileSync(`/sys/class/drm/${name}/device/vendor`, 'utf8').trim();
