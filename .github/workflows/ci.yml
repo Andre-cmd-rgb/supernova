@@ -1,0 +1,119 @@
+# Every push to main and every pull request into it, two jobs side by side,
+# each in a current Arch container:
+#   source:  the packaging lint, the unit tests, and the browser started
+#            headless from the source tree (tools/smoke.sh);
+#   package: packaging/arch/PKGBUILD built by makepkg as an ordinary user (its
+#            check() runs the unit tests and starts the assembled tree), then
+#            installed and started from /usr/bin/supernova.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+      options: --shm-size=1g # Chromium's shared memory: Docker gives 64 MB
+    timeout-minutes: 20
+    steps:
+      - name: git, for the checkout
+        run: pacman -Syu --noconfirm --needed git
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The browser's libraries are the package's own depends, so both jobs
+      # start it with the list that ships.
+      - name: Node, the lint tools and the browser's libraries
+        run: |
+          mapfile -t deps < <(bash -c '. packaging/arch/PKGBUILD && printf "%s\n" "${depends[@]}"')
+          pacman -S --noconfirm --needed nodejs npm unzip shellcheck actionlint desktop-file-utils "${deps[@]}"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .electron-cache
+          key: electron-${{ hashFiles('electron.lock') }}
+
+      - name: castlabs Electron, as electron.lock pins it
+        run: tools/fetch-electron.sh
+
+      - name: Packaging lint
+        run: tools/lint-packaging.sh
+
+      - name: Dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      # Root, in the container, so tools/smoke.sh runs Chromium without its sandbox.
+      - name: Started headless from the source tree
+        run: tools/smoke.sh .electron/electron .
+
+  package:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+      options: --shm-size=1g # Chromium's shared memory: Docker gives 64 MB
+    timeout-minutes: 30
+    steps:
+      - name: git, for the checkout, and the build user
+        run: |
+          pacman -Syu --noconfirm --needed git
+          useradd -m builder
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Read from the PKGBUILD, so a dependency that does not exist fails here.
+      - name: The package's dependencies, and namcap
+        run: |
+          mapfile -t deps < <(bash -c '. packaging/arch/PKGBUILD &&
+            printf "%s\n" "${depends[@]}" "${makedepends[@]}" "${checkdepends[@]}"' | grep .)
+          pacman -S --noconfirm --needed namcap desktop-file-utils "${deps[@]}"
+
+      # The castlabs zip, if the source job has cached it already: makepkg
+      # downloads it otherwise, and checks its sha256 either way.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .electron-cache
+          key: electron-${{ hashFiles('electron.lock') }}
+
+      # The default source is this checkout's HEAD (git+file://): on a pull
+      # request, the merge commit. check() starts the browser as the build
+      # user, and Docker's seccomp policy forbids the user namespaces
+      # Chromium's sandbox is built on, so it runs without one here.
+      - name: makepkg, as the build user
+        run: |
+          cp .electron-cache/electron-*.zip packaging/arch/ 2>/dev/null || true
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          cd packaging/arch
+          sudo -u builder -H env SUPERNOVA_SMOKE_NO_SANDBOX=1 makepkg --noconfirm
+
+      - name: namcap (advice, not a failure)
+        run: namcap packaging/arch/supernova-*.pkg.tar.zst || true
+
+      # The container is thrown away, so the package is installed for real.
+      - name: Installed, and started from /usr/bin
+        run: |
+          pacman -U --noconfirm packaging/arch/supernova-*.pkg.tar.zst
+          desktop-file-validate /usr/share/applications/supernova.desktop
+          test ! -e /usr/lib/supernova/chrome-sandbox
+          sudo -u builder -H env SUPERNOVA_SMOKE_NO_SANDBOX=1 tools/smoke.sh /usr/bin/supernova
