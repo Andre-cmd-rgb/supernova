@@ -10,7 +10,7 @@
   "private": true,
   "scripts": {
     "build": "node tools/build.mjs",
-    "test": "node --test test/",
+    "test": "tools/test.sh",
     "start": "node tools/build.mjs && tools/run-dev.sh"
   },
   "dependencies": {

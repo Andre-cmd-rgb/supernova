@@ -162,10 +162,10 @@ const ctx = {
     if (!wc) return;
     if (wc.isDevToolsOpened()) wc.closeDevTools(); else wc.openDevTools({ mode: 'detach' });
   },
-  openSettings(w, hash = '') {
+  openSettings(w, hash = '', { background = false } = {}) {
     const existing = w.tabs.find((t) => t.url.startsWith('supernova://settings'));
-    if (existing) { w.activate(existing); if (hash) existing.navigate(`supernova://settings/${hash}`); return; }
-    w.newTab({ url: `supernova://settings/${hash}` });
+    if (existing) { if (!background) w.activate(existing); if (hash) existing.navigate(`supernova://settings/${hash}`); return; }
+    w.newTab({ url: `supernova://settings/${hash}`, background, lazy: background });
   },
   openDownloadsFolder() { downloads.openFolder(); },
   quit() { app.quit(); },
@@ -608,7 +608,9 @@ app.whenReady().then(async () => {
   } else {
     const w = newWindow({ url: urls[0] });
     for (const u of urls.slice(1)) w.newTab({ url: u });
-    if (firstRun) ctx.openSettings(w, '#welcome');
+    // First start: the welcome page (import from Chrome). If a link opened
+    // the browser, that link stays in front and the welcome waits beside it.
+    if (firstRun) ctx.openSettings(w, '#welcome', { background: urls.length > 0 });
   }
 
   if (services.adblock && services.adblock.scheduleUpdate) services.adblock.scheduleUpdate();
