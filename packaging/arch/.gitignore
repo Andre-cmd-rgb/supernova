@@ -1,0 +1,8 @@
+# What makepkg leaves here: the source mirror, the castlabs zip, the build
+# and package trees, and the package.
+/supernova/
+/electron-*.zip
+/src/
+/pkg/
+/*.pkg.tar.*
+/*.log
