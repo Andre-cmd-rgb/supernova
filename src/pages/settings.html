@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="pages.css">
+</head>
+<body>
+<main>
+  <h1>Supernova</h1>
+
+  <section id="welcome" hidden>
+    <h2>Welcome</h2>
+    <p class="lead">A light, fast browser that puts nothing between you and the page. Two things to start with:</p>
+    <div class="row"><div><b>Bring your passwords from Chrome</b><small>Passwords, logins, bookmarks and history, once. Chrome is not needed afterwards.</small></div><a class="button primary" href="#import">Import…</a></div>
+    <div class="row"><div><b>Make Supernova your default browser</b><small>Links from other apps open here.</small></div><button class="button" data-default>Make default</button></div>
+  </section>
+
+  <section id="import">
+    <h2>Import</h2>
+    <div id="profiles"><p class="muted">Looking for browsers…</p></div>
+    <div class="checks" id="what">
+      <label><input type="checkbox" name="passwords" checked> Passwords</label>
+      <label><input type="checkbox" name="cookies" checked> Logins (stay signed in to sites)</label>
+      <label><input type="checkbox" name="bookmarks" checked> Bookmarks</label>
+      <label><input type="checkbox" name="history" checked> History</label>
+    </div>
+    <div class="row"><div><b>Passwords from a file</b><small>A CSV exported from passwords.google.com or another password manager.</small></div><button class="button" id="csv">Choose file…</button></div>
+    <p id="import-result" class="result" hidden></p>
+  </section>
+
+  <section>
+    <h2>Appearance</h2>
+    <div class="row"><div><b>Tabs</b><small>Vertical on the left, or along the top.</small></div>
+      <select data-setting="tabs.position"><option value="left">On the left</option><option value="top">On top</option></select></div>
+    <div class="row"><div><b>Show the sidebar</b><small>Ctrl+S hides and shows it.</small></div><input type="checkbox" data-setting="sidebar.visible"></div>
+    <div class="row"><div><b>Default browser</b><small id="default-state">…</small></div><button class="button" data-default>Make default</button></div>
+  </section>
+
+  <section>
+    <h2>Battery and video</h2>
+    <p class="lead">On battery, what moves on screen costs the most power. These apply only while unplugged unless noted.</p>
+    <div class="row"><div><b>Video quality on battery</b><small>Higher streams cost more to decode and to move around.</small></div>
+      <select data-setting="video.maxHeightOnBattery" data-number><option value="720">Up to 720p</option><option value="1080">Up to 1080p</option><option value="1440">Up to 1440p</option><option value="0">No limit</option></select></div>
+    <div class="row"><div><b>Video quality plugged in</b></div>
+      <select data-setting="video.maxHeightOnAC" data-number><option value="1080">Up to 1080p</option><option value="1440">Up to 1440p</option><option value="2160">Up to 4K</option><option value="0">No limit</option></select></div>
+    <div class="row"><div><b>Prefer 30 fps video on battery</b><small>Halves the frames to draw. On 60 fps videos YouTube may then offer a lower resolution.</small></div><input type="checkbox" data-setting="video.prefer30fpsOnBattery"></div>
+    <div class="row"><div><b>Limit page animations to 30 fps on battery</b><small>Like Chrome's Energy Saver. Video is not affected.</small></div><input type="checkbox" data-setting="animations.limitOnBattery"></div>
+    <div class="row"><div><b>Freeze hidden tabs after</b><small>A frozen tab runs nothing until you come back to it. Pinned tabs and tabs playing sound never sleep.</small></div>
+      <span class="pair"><label>plugged in <input type="number" min="0" max="999" data-setting="tabs.freezeAfterMin" data-sub="ac"> min</label><label>battery <input type="number" min="0" max="999" data-setting="tabs.freezeAfterMin" data-sub="battery"> min</label></span></div>
+    <div class="row"><div><b>Unload hidden tabs after</b><small>Frees their memory; the page reloads when you return.</small></div>
+      <span class="pair"><label>plugged in <input type="number" min="0" max="9999" data-setting="tabs.discardAfterMin" data-sub="ac"> min</label><label>battery <input type="number" min="0" max="9999" data-setting="tabs.discardAfterMin" data-sub="battery"> min</label></span></div>
+  </section>
+
+  <section>
+    <h2>Ads and privacy</h2>
+    <div class="row"><div><b>Block ads and trackers</b><small>Blocked before they download, YouTube's ads included. The shield in the sidebar turns it off for one site.</small></div><input type="checkbox" data-setting="adblock.enabled"></div>
+    <div class="row"><div><b>Hide cookie banners</b><small>Hides consent pop-ups instead of answering them.</small></div><input type="checkbox" data-setting="adblock.cookieBanners"></div>
+    <div class="row"><div><b>Search suggestions</b><small>What you type in the command bar is sent to Google for suggestions. Never in private windows.</small></div><input type="checkbox" data-setting="search.suggestions"></div>
+    <div id="allowlist"></div>
+    <div class="row"><div><b>Clear browsing data</b><small>History, cookies and site data, cached files.</small></div><button class="button" id="clear">Clear…</button></div>
+  </section>
+
+  <section>
+    <h2>Passwords</h2>
+    <div class="row"><div><b>Offer to save passwords</b></div><input type="checkbox" data-setting="passwords.offerToSave"></div>
+    <p id="vault-state" class="muted"></p>
+    <input id="pw-filter" class="filter" placeholder="Filter saved passwords" hidden>
+    <ul id="passwords" class="list"></ul>
+  </section>
+
+  <section>
+    <h2>Site permissions</h2>
+    <ul id="sites" class="list"></ul>
+  </section>
+
+  <section>
+    <h2>About</h2>
+    <p id="about" class="muted"></p>
+  </section>
+</main>
+<script src="settings.js"></script>
+</body>
+</html>

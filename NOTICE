@@ -1,0 +1,16 @@
+Supernova is MIT-licensed (LICENSE). It runs on, but does not contain in this
+repository, the following, which keep their own licences:
+
+- castlabs Electron for Content Security (ECS), https://github.com/castlabs/electron-releases:
+  Electron (MIT) and Chromium (BSD-style and others, see LICENSES.chromium.html
+  in the Electron build), plus castlabs' Widevine integration under castlabs'
+  terms. Widevine itself is Google's and is downloaded by castlabs' component
+  updater at run time; it is never shipped by Supernova.
+- @ghostery/adblocker-electron and its dependencies (MPL-2.0), installed by npm.
+  Filter lists (EasyList, EasyPrivacy, uBlock Origin's and others) are
+  downloaded at run time under their own licences.
+- esbuild (MIT), used only to build.
+
+The name "Supernova" and the icon in assets/icons are this project's own.
+Supernova was inspired by the philosophy of "Search" for macOS by Office
+Commun (MIT), but shares no code, name or artwork with it.

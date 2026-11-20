@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>Supernova</title>
+<link rel="stylesheet" href="ui.css">
+</head>
+<body>
+<div id="app">
+  <aside id="chrome" class="chrome">
+    <div class="bar drag">
+      <button class="btn nodrag" id="back" title="Back (Alt+Left)"></button>
+      <button class="btn nodrag" id="forward" title="Forward (Alt+Right)"></button>
+      <button class="btn nodrag" id="reload" title="Reload (Ctrl+R)"></button>
+      <span class="grow"></span>
+      <button class="btn nodrag shield" id="shield" title="Ad blocking on this site"></button>
+    </div>
+    <button class="address nodrag" id="address" title="Search or enter address (Ctrl+L)">
+      <span class="lock" id="lock"></span><span class="host" id="host"></span>
+      <span class="star" id="star" title="Bookmark (Ctrl+D)"></span>
+    </button>
+    <div class="pinned" id="pinned"></div>
+    <div class="tabs" id="tabs"></div>
+    <button class="newtab nodrag" id="newtab" title="New tab (Ctrl+T)"><span class="ic" data-icon="plus"></span><span>New tab</span></button>
+    <div class="footer">
+      <div class="hover" id="hover"></div>
+      <div class="foot-row">
+        <span class="battery" id="battery" title="On battery: video and animations are limited to save power"></span>
+        <span class="grow"></span>
+        <button class="btn nodrag" id="downloads" title="Downloads (Ctrl+J)"></button>
+        <button class="btn nodrag" id="settings" title="Settings (Ctrl+,)"></button>
+      </div>
+    </div>
+  </aside>
+
+  <div id="palette" class="palette-wrap" hidden>
+    <div class="scrim" id="scrim"></div>
+    <div class="palette" role="dialog" aria-label="Search or enter address">
+      <div class="palette-head">
+        <span class="ic" data-icon="search"></span>
+        <input id="pinput" spellcheck="false" autocomplete="off" placeholder="Search Google or enter an address">
+        <span class="hint" id="phint"></span>
+      </div>
+      <ul id="plist" class="plist"></ul>
+    </div>
+  </div>
+
+  <div id="float" class="float" hidden></div>
+</div>
+<script src="icons.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>
