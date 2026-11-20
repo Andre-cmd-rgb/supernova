@@ -1,0 +1,7 @@
+#!/bin/sh
+# /usr/bin/supernova: starts the browser installed in /usr/lib/supernova.
+# An Electron-based program (VS Code's terminal, for one) can leave
+# ELECTRON_RUN_AS_NODE set for what it starts, and the browser would then run
+# as a bare Node.js instead.
+unset ELECTRON_RUN_AS_NODE
+exec /usr/lib/supernova/supernova "$@"
