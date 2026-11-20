@@ -301,6 +301,9 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     for (const t of tabs.values()) t.active = isActiveFor(t.top);
     if (st.enabled !== wasEnabled) {
       for (const ses of sessions.keys()) (st.enabled ? hook : unhook)(ses);
+      // Off: no list downloads either (this clears the timer). On: the
+      // refresh schedule comes back, also when the engine is still loaded.
+      if (st.initPromise) scheduleUpdate();
     }
     if (st.initPromise && st.enabled && (st.enabled !== wasEnabled || variantWanted() !== wasVariant)) {
       ensureEngine().catch(() => {});
