@@ -6,9 +6,10 @@
 // allowlist, judges requests by their Referer, and gives every scriptlet a
 // user gesture.
 //
-// Costs (measured, see the report in docs or the agent B notes):
-//   - startup: read + deserialize the cached engine (~7 MB, ~10-15 ms);
-//   - per request: one main-thread call of ~10 us;
+// Costs (bench/adblock-cost.mjs, i7-11850H):
+//   - startup: read + deserialize the cached engine (~7 MB, ~11 ms);
+//   - per request: one main-thread call, p50 ~8 us, p99 ~50 us (long
+//     googlevideo.com segment URLs ~30 us);
 //   - list refresh: once a day, downloaded and parsed in a worker thread, so
 //     the main thread only pays the deserialize.
 //
