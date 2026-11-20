@@ -25,7 +25,7 @@ const { isMainThread, workerData, parentPort } = require('node:worker_threads');
 // package itself, so this works however npm lays out node_modules.
 const ghosteryDir = path.dirname(require.resolve('@ghostery/adblocker-electron/package.json'));
 const ghostery = createRequire(path.join(ghosteryDir, 'package.json'));
-const { FiltersEngine, Request, adsAndTrackingLists, fullLists } = ghostery('@ghostery/adblocker');
+const { FiltersEngine, NetworkFilter, Request, adsAndTrackingLists, fullLists } = ghostery('@ghostery/adblocker');
 const tldts = ghostery('tldts-experimental');
 const PRELOAD_PATH = ghostery.resolve('@ghostery/adblocker-electron-preload');
 
@@ -78,6 +78,21 @@ const SCHEME = Object.freeze({
 
 const COSMETICS_CHANNEL = '@ghostery/adblocker/inject-cosmetic-filters';
 const OBSERVER_CHANNEL = '@ghostery/adblocker/is-mutation-observer-enabled';
+
+function popcount(x) {
+  let n = 0;
+  for (let v = x >>> 0; v !== 0; v &= v - 1) n += 1;
+  return n;
+}
+
+// The engine stores `$~xhr` as "every type but xhr", document included, while
+// uBO never applies a negated type to pages. A filter written with positive
+// types holds at most half of the type bits (the library's own rule when it
+// prints a filter back), so that is what "names documents" means here.
+const TYPE_BITS = popcount(NetworkFilter.parse('||x.example^').getCptMask());
+function namesDocuments(filter) {
+  return filter.fromDocument() && popcount(filter.getCptMask()) * 2 <= TYPE_BITS;
+}
 
 function makeEnv() {
   const env = new Map();
@@ -491,7 +506,7 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     if (engine === null) return PASS;
     const type = details.resourceType;
     const tab = tabFor(details);
-    if (type === 'mainFrame') return PASS; // documents are never blocked
+    if (type === 'mainFrame') return decidePage(engine, details);
     if (tab !== null && !tab.active) return PASS;
     // The document that made the request (uBO's context); a frame with an
     // opaque origin falls back to the tab's top-level URL.
@@ -506,6 +521,32 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     }));
     if (redirect) return { redirectURL: surrogatePrefix + encodeURIComponent(redirect.filename) };
     return match ? CANCEL : PASS;
+  }
+
+  /** A page (top-level document) is cancelled only by a filter that names
+   *  documents ($document / $doc: uBO's badware and phishing lists); plain
+   *  filters such as ||ads.example^ hide a site's resources, never the site,
+   *  and neither do negated ones such as /ads/$~xhr (the engine cannot tell
+   *  `$all` from no option, so `$all` does not block pages either). A page is
+   *  never redirected to a surrogate. Its own site, not the page it
+   *  replaces, decides the allowlist. */
+  function decidePage(engine, details) {
+    const url = details.url;
+    if (!isActiveFor(url)) return PASS;
+    const request = Request.fromRawDetails({ url, sourceUrl: url, type: 'mainFrame', tabId: details.webContentsId || 0 });
+    // Not engine.match(): it stops at the first filter, and a hosts-style
+    // ||site^ listed earlier hides the site's $document filter.
+    let named = null;
+    let excepted = false;
+    for (const f of engine.matchAll(request)) {
+      if (f.isCSP()) continue;
+      if (f.isException()) {
+        if (!f.isGenericHide() && !f.isSpecificHide()) excepted = true; // not $elemhide & co.
+      } else if (namesDocuments(f) && (named === null || f.isImportant())) {
+        named = f;
+      }
+    }
+    return named !== null && (!excepted || named.isImportant()) ? CANCEL : PASS;
   }
 
   function serveSurrogate(request) {
