@@ -363,9 +363,15 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     return buildEngineBytes({ ...job, fetchImpl: o.fetch });
   }
 
-  /** Download and parse the lists for `variant`, cache and load the result. */
+  /** Download and parse the lists for `variant`, cache and load the result.
+   *  One build at a time: the same variant joins the running build, another
+   *  one (adblock.cookieBanners switched mid-build) waits for it, and is
+   *  dropped if the switch was undone meanwhile. */
   function refresh(variant = variantWanted()) {
-    if (st.building && st.building.variant === variant) return st.building.promise;
+    if (st.building) {
+      if (st.building.variant === variant) return st.building.promise;
+      return st.building.promise.then(() => (!st.closed && variant === variantWanted() ? refresh(variant) : false));
+    }
     clearTimeout(st.timer);
     st.timer = null;
     const promise = (async () => {
