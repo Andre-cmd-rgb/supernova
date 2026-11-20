@@ -39,8 +39,19 @@ function parseColorsToml(text) {
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
+// Relative luminance of a #rrggbb colour, 0 (black) to 1 (white).
+function luminance(hex) {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+
+// Nova's themes say `mode = "light"|"dark"`; a theme of the user's may not,
+// and then its background decides, and only without one the desktop's preference.
 function normalize(raw, fallbackDark) {
-  const mode = raw.mode === 'dark' || raw.mode === 'light' ? raw.mode : (fallbackDark ? 'dark' : 'light');
+  let mode = raw.mode === 'dark' || raw.mode === 'light' ? raw.mode : null;
+  if (!mode && typeof raw.background === 'string' && HEX.test(raw.background)) mode = luminance(raw.background) < 0.3 ? 'dark' : 'light';
+  if (!mode) mode = fallbackDark ? 'dark' : 'light';
   const base = mode === 'dark' ? DARK : LIGHT;
   const out = { mode, source: raw.source || 'built-in' };
   for (const k of KEYS) {
