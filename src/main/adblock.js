@@ -104,7 +104,7 @@ function sleep(ms, { unref = false } = {}) {
 
 // ----- building an engine (worker thread or in-process) ------------------------
 
-async function fetchText(fetchImpl, url, timeoutMs, tries = 3) {
+async function fetchText(fetchImpl, url, { timeoutMs, retryPauseMs, cancelled, tries = 3 }) {
   for (let i = 1; ; i++) {
     try {
       const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
@@ -113,24 +113,35 @@ async function fetchText(fetchImpl, url, timeoutMs, tries = 3) {
       if (text.length === 0) throw new Error('empty response');
       return text;
     } catch (err) {
-      if (i >= tries) throw new Error(`${url}: ${err.message}`);
-      await sleep(1000 * i);
+      if (i >= tries || cancelled()) throw new Error(`${url}: ${err.message}`);
     }
+    await sleep(retryPauseMs * i);
+    if (cancelled()) throw new Error(`${url}: build cancelled`);
   }
 }
 
 /** Download the lists and resources, parse them, return the serialized
  *  engine (Uint8Array). CPU-heavy (~0.5 s): runs in a worker normally. */
-async function buildEngineBytes({ urls, resourcesUrl, timeoutMs, fetchImpl, concurrency = 4 }) {
+async function buildEngineBytes({ urls, resourcesUrl, timeoutMs, retryPauseMs = 1000, fetchImpl, concurrency = 4 }) {
   // A few connections at a time: a burst of 15 parallel downloads from
   // raw.githubusercontent.com regularly stalls the biggest files.
   const all = [...urls, resourcesUrl];
   const texts = new Array(all.length);
   let next = 0;
+  // One file that cannot be had fails the build: the other connections stop
+  // too, instead of downloading (and retrying) the rest for nothing while
+  // the next attempt is already scheduled.
+  let failed = false;
+  const cancelled = () => failed;
   const worker = async () => {
-    while (next < all.length) {
+    while (!failed && next < all.length) {
       const i = next++;
-      texts[i] = await fetchText(fetchImpl, all[i], timeoutMs);
+      try {
+        texts[i] = await fetchText(fetchImpl, all[i], { timeoutMs, retryPauseMs, cancelled });
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, all.length) }, worker));
@@ -213,8 +224,9 @@ function ensureIpc(ipcMain) {
  * now (Date.now), updateIntervalMs (1 day), startupDelayMs (1 min, first
  * refresh of a stale cache), retryMs (2 min, doubled per failure up to
  * retryMaxMs 1 h), initTimeoutMs (5 s, how long init() waits for a first-run
- * download), fetchTimeoutMs (20 s per file), lists ({ 'ads-tracking': [urls],
- * full: [urls] }), resourcesUrl, log (console).
+ * download), fetchTimeoutMs (20 s per file), fetchRetryMs (1 s, pause before
+ * the 2nd try of a file, doubled before the 3rd), lists ({ 'ads-tracking':
+ * [urls], full: [urls] }), resourcesUrl, log (console).
  */
 function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
   if (!cacheDir) throw new Error('createAdblock: cacheDir is required');
@@ -229,6 +241,7 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     retryMaxMs: HOUR,
     initTimeoutMs: 5000,
     fetchTimeoutMs: 20000,
+    fetchRetryMs: 1000,
     lists: LISTS,
     resourcesUrl: RESOURCES_URL,
     log: console,
@@ -335,7 +348,7 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
   }
 
   async function buildBytes(variant) {
-    const job = { urls: o.lists[variant], resourcesUrl: o.resourcesUrl, timeoutMs: o.fetchTimeoutMs };
+    const job = { urls: o.lists[variant], resourcesUrl: o.resourcesUrl, timeoutMs: o.fetchTimeoutMs, retryPauseMs: o.fetchRetryMs };
     if (o.useWorker) {
       try {
         return await buildInWorker(job);
