@@ -10,6 +10,7 @@ const { fixup, displayHost, searchUrl } = require('./url');
 
 const SIDEBAR_W = 240;
 const TOPBAR_H = 40;
+const FLOAT_IDLE_MS = 30000;
 
 class SnWindow extends EventEmitter {
   /**
@@ -56,22 +57,19 @@ class SnWindow extends EventEmitter {
       // The UI only repaints when state changes; nothing animates in it.
       backgroundThrottling: true,
     };
+    this._uiPrefs = uiPrefs;
     this.ui = new WebContentsView({ webPreferences: uiPrefs });
     this.ui.setBackgroundColor('#00000000');
-    this.float = new WebContentsView({ webPreferences: uiPrefs });
-    this.float.setBackgroundColor('#00000000');
-    this.float.setVisible(false);
     this.base.contentView.addChildView(this.ui);
-
-    for (const view of [this.ui, this.float]) {
-      const wc = view.webContents;
-      wc.on('before-input-event', (e, input) => { if (ctx.shortcuts.handle(this, input, null)) e.preventDefault(); });
-      wc.on('did-finish-load', () => this.pushState(true));
-      wc.setWindowOpenHandler(() => ({ action: 'deny' }));
-      wc.on('will-navigate', (e) => e.preventDefault());
-    }
+    this._wireUiView(this.ui);
     this.ui.webContents.loadFile(ctx.uiFile, { query: { view: 'chrome', private: this.private ? '1' : '0' } });
-    this.float.webContents.loadFile(ctx.uiFile, { query: { view: 'float', private: this.private ? '1' : '0' } });
+    // The float view (prompts, find bar, download toasts) is a renderer of its
+    // own, ~22 MiB, and idle nearly always: made when first needed and closed
+    // FLOAT_IDLE_MS after it was last shown (see _ensureFloat).
+    this.float = null;
+    this._floatQueue = [];
+    this._floatIdle = null;
+    this._floatFocus = false;
 
     // Show as soon as the UI has painted once (a local file: a few ms), with
     // a fallback so a slow disk never leaves the window invisible.
@@ -92,7 +90,8 @@ class SnWindow extends EventEmitter {
     this.base.on('close', () => { this._closing = true; this.emit('close', this); });
     this.base.on('closed', () => {
       for (const t of this.tabs) t.destroy();
-      for (const v of [this.ui, this.float]) try { v.webContents.close(); } catch {}
+      clearTimeout(this._floatIdle);
+      for (const v of [this.ui, this.float]) try { if (v) v.webContents.close(); } catch {}
       this.emit('closed', this);
     });
 
@@ -154,7 +153,7 @@ class SnWindow extends EventEmitter {
     tab.view.setVisible(true);
     this.base.contentView.addChildView(tab.view);
     if (this.overlay) this.base.contentView.addChildView(this.ui);
-    if (this.float.getVisible()) this.base.contentView.addChildView(this.float);
+    if (this.float && this.float.getVisible()) this.base.contentView.addChildView(this.float);
     this.layout();
     tab.shown();
     if (prev && prev !== tab) {
@@ -267,15 +266,80 @@ class SnWindow extends EventEmitter {
     this._layoutFloat();
   }
 
+  _wireUiView(view) {
+    const wc = view.webContents;
+    wc.on('before-input-event', (e, input) => { if (this.ctx.shortcuts.handle(this, input, null)) e.preventDefault(); });
+    wc.on('did-finish-load', () => this.pushState(true));
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    wc.on('will-navigate', (e) => e.preventDefault());
+  }
+
+  /** The float view, made on first use. */
+  _ensureFloat() {
+    clearTimeout(this._floatIdle);
+    this._floatIdle = null;
+    if (this.float) return this.float;
+    const view = new WebContentsView({ webPreferences: this._uiPrefs });
+    view.setBackgroundColor('#00000000');
+    view.setVisible(false);
+    this._wireUiView(view);
+    view._ready = false;
+    view.webContents.once('did-finish-load', () => {
+      view._ready = true;
+      for (const [channel, args] of this._floatQueue.splice(0)) view.webContents.send(channel, ...args);
+      this._focusFloatIfShown();
+    });
+    view.webContents.loadFile(this.ctx.uiFile, { query: { view: 'float', private: this.private ? '1' : '0' } });
+    this.float = view;
+    return view;
+  }
+
+  /** Send to the float view, once it has loaded. */
+  floatSend(channel, ...args) {
+    this._floatPost(channel, args, false);
+  }
+
+  // A focus asked for while the float is hidden (it shows only once its
+  // content has reported a size) is kept and given when it shows: Chromium
+  // drops focus() on a hidden view, and typing would go to the page.
+  _floatPost(channel, args, focus) {
+    const v = this._ensureFloat();
+    if (focus) this._floatFocus = true;
+    if (v._ready) {
+      v.webContents.send(channel, ...args);
+      this._focusFloatIfShown();
+    } else {
+      this._floatQueue.push([channel, args]);
+    }
+  }
+
+  _focusFloatIfShown() {
+    if (this._floatFocus && this.float && this.float.getVisible()) {
+      this._floatFocus = false;
+      this.float.webContents.focus();
+    }
+  }
+
+  _floatWanted() {
+    return !!(this.prompts.length || this.findOpen || this.ctx.downloads.toasts(this).length);
+  }
+
   _layoutFloat() {
-    const want = (this.prompts.length || this.findOpen || this.ctx.downloads.toasts(this).length) && this.floatSize.height > 0;
+    const needed = this._floatWanted();
+    if (needed && !this.float) this._ensureFloat();
+    const want = needed && this.floatSize.height > 0;
     if (!want || this.htmlFullscreen) {
-      if (this.float.getVisible()) {
+      if (this.float && this.float.getVisible()) {
         this.float.setVisible(false);
         try { this.base.contentView.removeChildView(this.float); } catch {}
       }
+      if (this.float && !needed && !this._floatIdle) {
+        this._floatIdle = setTimeout(() => this._closeFloat(), FLOAT_IDLE_MS);
+      }
       return;
     }
+    clearTimeout(this._floatIdle);
+    this._floatIdle = null;
     const p = this.pageBounds;
     const width = Math.min(this.floatSize.width || 380, p.width - 16);
     const height = Math.min(this.floatSize.height, p.height - 16);
@@ -285,6 +349,18 @@ class SnWindow extends EventEmitter {
       this.base.contentView.addChildView(this.float);
       if (this.overlay) this.base.contentView.addChildView(this.ui);
     }
+    this._focusFloatIfShown();
+  }
+
+  _closeFloat() {
+    this._floatIdle = null;
+    const v = this.float;
+    if (!v || this._floatWanted()) return;
+    this.float = null;
+    this._floatQueue = [];
+    this.floatSize = { width: 0, height: 0 };
+    try { this.base.contentView.removeChildView(v); } catch {}
+    try { v.webContents.close(); } catch {}
   }
 
   setFloatSize(width, height) {
@@ -309,7 +385,7 @@ class SnWindow extends EventEmitter {
     this.overlay = false;
     if (!this.tabs.length) return;
     if (this.active && this.active.view) this.base.contentView.addChildView(this.active.view);
-    if (this.float.getVisible()) this.base.contentView.addChildView(this.float);
+    if (this.float && this.float.getVisible()) this.base.contentView.addChildView(this.float);
     this.layout();
     this.focusPage();
     this.pushState();
@@ -322,8 +398,7 @@ class SnWindow extends EventEmitter {
     this.findOpen = true;
     this.pushState();
     this._layoutFloat();
-    this.float.webContents.send('sn:find-open');
-    this.float.webContents.focus();
+    this._floatPost('sn:find-open', [], true);
   }
 
   find(text, { forward = true, findNext = false } = {}) {
@@ -336,6 +411,7 @@ class SnWindow extends EventEmitter {
 
   closeFind() {
     this.findOpen = false;
+    this._floatFocus = false;
     const wc = this.active && this.active.webContents;
     if (wc) wc.stopFindInPage('keepSelection');
     if (this.active) this.active.find = null;
@@ -553,7 +629,7 @@ class SnWindow extends EventEmitter {
       if (this.base.isDestroyed() || this._closing) return;
       const s = this.state();
       for (const v of [this.ui, this.float]) {
-        if (!v.webContents.isDestroyed()) v.webContents.send('sn:state', s);
+        if (v && !v.webContents.isDestroyed()) v.webContents.send('sn:state', s);
       }
       this._layoutFloat();
     };
@@ -572,4 +648,4 @@ class SnWindow extends EventEmitter {
   }
 }
 
-module.exports = { SnWindow, SIDEBAR_W, TOPBAR_H };
+module.exports = { SnWindow, SIDEBAR_W, TOPBAR_H, FLOAT_IDLE_MS };

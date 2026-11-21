@@ -200,7 +200,7 @@ const ctx = {
 function windowForWebContents(wc) {
   if (!wc) return null;
   for (const w of windows) {
-    if (w.ui.webContents === wc || w.float.webContents === wc) return w;
+    if (w.ui.webContents === wc || (w.float && w.float.webContents === wc)) return w;
     for (const t of w.tabs) if (t.webContents === wc) return w;
   }
   // DevTools or a popup's opener chain: fall back to the hosting window.

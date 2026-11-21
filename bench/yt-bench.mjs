@@ -5,8 +5,12 @@
 //
 //   node bench/yt-bench.mjs --browser supernova|chrome [--seconds 30] [--warmup 8]
 //        [--video aqz-KE-bpKQ] [--quality hd1080] [--battery] [--fullscreen] [--hidden]
-//        [--max-height 720] [--translucent]
+//        [--max-height 720] [--translucent] [--extra='--switch=value ...'] [--label name] [--keep]
 //
+// --keep leaves the browser playing after the measurement (for probing it).
+// --features A,B enables more Chromium features in Supernova (SUPERNOVA_EXTRA_FEATURES).
+// --square gives YouTube's player square corners before measuring.
+// --settings='{"key":value}' writes those Supernova settings before start.
 // --battery runs Supernova as if unplugged (SUPERNOVA_FORCE_BATTERY=1).
 // --hidden switches to an empty workspace while measuring (is a page that is
 // not on screen still decoding and drawing?).
@@ -22,8 +26,12 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
+// --key value, --key=value (needed when the value starts with --), or --flag.
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) => {
-  if (a.startsWith('--')) acc.push([a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true]);
+  if (!a.startsWith('--')) return acc;
+  const eq = a.indexOf('=');
+  if (eq > 0) acc.push([a.slice(2, eq), a.slice(eq + 1)]);
+  else acc.push([a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true]);
   return acc;
 }, []));
 const browser = args.browser || 'supernova';
@@ -32,7 +40,7 @@ const warmup = Number(args.warmup || 8);
 const video = args.video || 'aqz-KE-bpKQ';
 const url = `https://www.youtube.com/watch?v=${video}`;
 const port = browser === 'chrome' ? 9334 : 9333;
-const label = args.label || `${browser}${args.battery ? '-battery' : ''}${args.fullscreen ? '-fs' : ''}${args.hidden ? '-hidden' : ''}${args.quality ? '-' + args.quality : ''}${args['max-height'] ? '-cap' + args['max-height'] : ''}${args.translucent ? '-translucent' : ''}`;
+const label = args.label || `${browser}${args.battery ? '-battery' : ''}${args.fullscreen ? '-fs' : ''}${args.hidden ? '-hidden' : ''}${args.quality ? '-' + args.quality : ''}${args['max-height'] ? '-cap' + args['max-height'] : ''}${args.translucent ? '-translucent' : ''}${args.features ? '-' + args.features : ''}${args.square ? '-square' : ''}${args.settings ? '-' + Object.entries(JSON.parse(args.settings)).map(([k, v]) => k.split('.').pop() + '=' + v).join(',') : ''}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const hypr = (lua) => execFileSync('hyprctl', ['dispatch', lua], { encoding: 'utf8' });
 
@@ -49,10 +57,12 @@ function launch() {
   if (browser === 'supernova') {
     fs.mkdirSync(profile, { recursive: true });
     if (fs.existsSync(keep)) fs.cpSync(keep, path.join(profile, 'adblock'), { recursive: true });
+    const settings = args.settings ? JSON.parse(args.settings) : {};
     if (args['max-height']) {
       const h = Number(args['max-height']);
-      fs.writeFileSync(path.join(profile, 'settings.json'), JSON.stringify({ 'video.maxHeightOnAC': h, 'video.maxHeightOnBattery': h }));
+      Object.assign(settings, { 'video.maxHeightOnAC': h, 'video.maxHeightOnBattery': h });
     }
+    if (Object.keys(settings).length) fs.writeFileSync(path.join(profile, 'settings.json'), JSON.stringify(settings));
     if (!args.translucent) {
       execFileSync('hyprctl', ['eval', 'hl.window_rule({ match = { class = "supernova" }, tag = "-default-opacity", opacity = "1 1" })']);
     }
@@ -60,9 +70,9 @@ function launch() {
   const script = `/tmp/sn-bench-launch-${browser}.sh`;
   const cmd = browser === 'chrome'
     ? `exec /opt/google/chrome/chrome --user-data-dir=${profile} --no-first-run --no-default-browser-check --password-store=basic ` +
-      `$(grep -v '^#' "$HOME/.config/chrome-flags.conf" | tr '\\n' ' ') --remote-debugging-port=${port} '${url}'`
-    : `export SUPERNOVA_PROFILE=${profile}${args.battery ? ' SUPERNOVA_FORCE_BATTERY=1' : ' SUPERNOVA_FORCE_BATTERY=0'}; unset ELECTRON_RUN_AS_NODE; ` +
-      `exec ${root}/.electron/electron ${root} --remote-debugging-port=${port} '${url}'`;
+      `$(grep -v '^#' "$HOME/.config/chrome-flags.conf" | tr '\\n' ' ') --remote-debugging-port=${port} ${args.extra || ''} '${url}'`
+    : `export SUPERNOVA_PROFILE=${profile}${args.battery ? ' SUPERNOVA_FORCE_BATTERY=1' : ' SUPERNOVA_FORCE_BATTERY=0'}${args.features ? ` SUPERNOVA_EXTRA_FEATURES=${args.features}` : ''}; unset ELECTRON_RUN_AS_NODE; ` +
+      `exec ${root}/.electron/electron ${root} --remote-debugging-port=${port} ${args.extra || ''} '${url}'`;
   fs.writeFileSync(script, `#!/bin/bash\n${cmd} > /tmp/sn-bench-${browser}.log 2>&1\n`, { mode: 0o755 });
   hypr('hl.dsp.focus({ workspace = "9" })');
   hypr(`hl.dsp.exec_cmd("${script}")`);
@@ -139,6 +149,7 @@ async function main() {
   if (args.quality) await evaluate(`document.getElementById('movie_player').setPlaybackQualityRange('${args.quality}')`);
   // Both browsers go fullscreen the same way, as YouTube's own button does.
   if (args.fullscreen) await evaluate(`document.getElementById('movie_player').requestFullscreen().then(() => 'ok', (e) => e.message)`);
+  if (args.square) await evaluate(`(() => { const s = document.createElement('style'); s.textContent = 'ytd-player#ytd-player { border-radius: 0 !important; }'; document.documentElement.appendChild(s); })()`);
   // The cursor goes to the screen's corner, so YouTube hides its controls and
   // nothing hovers over the video while measuring.
   hypr('hl.dsp.cursor.move({ x = 99999, y = 99999 })');
@@ -149,7 +160,7 @@ async function main() {
   const after = await evaluate(STATS);
   if (args.hidden) hypr('hl.dsp.focus({ workspace = "9" })');
   ws.close();
-  try { process.kill(pid, 'SIGTERM'); } catch {}
+  if (!args.keep) try { process.kill(pid, 'SIGTERM'); } catch {}
   const result = {
     ...measured,
     browser, video, battery: !!args.battery, fullscreen: !!args.fullscreen, hidden: !!args.hidden,

@@ -43,6 +43,9 @@ function applySwitches(app, { privateOnly = false } = {}) {
     // Hidden or backgrounded media stops decoding its video track; audio plays on.
     'BackgroundVideoTrackOptimization',
   ];
+  // Experiments (bench/yt-bench.mjs --features): more features without
+  // replacing this list, which a second --enable-features would do.
+  for (const f of (process.env.SUPERNOVA_EXTRA_FEATURES || '').split(',')) if (/^\w+$/.test(f)) features.push(f);
   add('enable-features', features.join(','));
 
   const node = process.env.SUPERNOVA_RENDER_NODE || integratedRenderNode();
