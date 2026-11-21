@@ -33,15 +33,17 @@ Measurements of the finished browser against Chrome on real YouTube are in
   (dependency injection); only `main.js`, `window.js` and `tab.js` load
   Electron at the top (`test/source-rules.test.js` holds this). `npm test` is
   `tools/test.sh`: every `test/*.test.js` under `env -i`, with a throwaway
-  HOME, XDG dirs and TMPDIR and a D-Bus address that leads nowhere, so no test
-  can read or write the user's profile, keyring or session bus, and nothing a
-  test leaves behind outlives the run.
+  HOME, XDG dirs and TMPDIR and D-Bus addresses (session and system bus) that
+  lead nowhere, so no test can read or write the user's profile, keyring or
+  buses, and nothing a test leaves behind outlives the run. The one variable
+  let through is `SN_SKIP_ELECTRON_TESTS=1`, which skips the tests that start
+  Electron; an Electron that is there but cannot start fails them.
 - Web content is untrusted, and so is everything a page's renderer sends. A
   page never reaches `supernova://` or `file://` (see "Internal pages"), IPC
   from the browser UI is accepted only from a window's own UI and float views,
   and handlers take origins from `event.senderFrame`, never from a payload.
 - Data lives in `app.getPath('userData')` (`~/.config/supernova`). Writes are
-  atomic (write `file.tmp`, then rename).
+  atomic (a temporary file, then a rename) and the files private (mode 0600).
 
 ## Layout
 
@@ -310,9 +312,11 @@ A top-level page is only blocked by a filter that names documents (`$document`,
 unhooked and no lists are downloaded. A damaged cache is rebuilt from the
 lists; with no cache and no network the browser starts without blocking and
 retries with a doubling backoff (2 min up to 1 h). One list build runs at a
-time. Cosmetic filters and scriptlets go to top-level pages only, chosen by
-the URL of the frame that asks (`event.senderFrame`), never by a URL the page
-sends; a surrogate script the library does not have is a 404. Behaviour:
+time. Cosmetic filters and scriptlets go only to the frame that is its tab's
+current main frame (`event.senderFrame` with the process and routing id of
+`event.sender.mainFrame`: not a subframe, a fenced frame or a page on its way
+out), chosen by that frame's URL, never by a URL the page sends; a surrogate
+script the library does not have is a 404. Behaviour:
 `test/adblock.test.js`; cost: `bench/adblock-cost.mjs`
 (~11 ms engine load, ~8 us p50 / ~50 us p99 per request).
 
@@ -372,8 +376,9 @@ when nothing is shown, and closed after 30 s with nothing in it
 request made while it is hidden (find opened with Ctrl+F) is applied when it
 is shown. Each tab's prompts stay pending while another tab is shown, and the
 UI shows only the active tab's. Hidden tabs are frozen and later discarded on
-the timers in `tabs.freezeAfterMin` / `tabs.discardAfterMin`; tabs that play
-or capture are left alone. A tab the user typed text into (the page preload
+the timers in `tabs.freezeAfterMin` / `tabs.discardAfterMin`, counted from
+when the tab was hidden or went quiet; tabs that play or capture are left
+alone, and a freeze that a show overtakes is undone (`test/tab.test.js`). A tab the user typed text into (the page preload
 reports the first trusted `input` event in a text field, textarea or editable
 element, `sn:edited`) may be frozen but is not discarded until it navigates,
 because a discard would lose the text; Chrome keeps tabs with form input the
@@ -405,22 +410,32 @@ settings, findTab, desktopCapturer })` answers them, and
 
 - Camera, microphone, location, notifications, MIDI and the like are asked in
   a prompt over the page; Allow and Block are remembered per origin in the
-  `permissions` setting (camera and microphone apart). A site allowed either
-  may also read the devices' names.
-- **Screen sharing** is asked every time; only Block is remembered. A frame
-  with no origin never gets the screen.
+  `permissions` setting (camera and microphone apart). enumerateDevices
+  checks each kind for the devices' names; Chromium's own checks after
+  `getUserMedia` carry no kind, and pass for a site allowed either.
+- **Screen sharing** is asked every time; only Block is remembered (an Allow
+  saved by beta 1 is ignored and not shown). `getDisplayMedia` reaches the
+  permission request handler first, as `display-capture`, which only checks
+  for a Block, then the display-media handler, which asks: one prompt. A
+  frame with no origin never gets the screen.
 - **Opening other apps** (`mailto:`, `zoommtg:`) is asked each time; a block
   sticks.
-- **Files a page was given** (the File System Access API): reading the file
-  the user picked needs no prompt; saving changes to it is asked once per
-  site and file while the browser runs, and is not written to settings.
+- **Files a page was given** (the File System Access API): reading a file or
+  folder the user picked (in the file chooser, by dropping it, or on an
+  earlier visit) needs no prompt; anything else, saving changes to it, is
+  asked once per site and file while the browser runs (each time if the file
+  is not named), is not written to settings, and is forgotten with the site
+  ("reset" in settings) or, for a private window, with the private session.
+- A prompt with no tab to show it in refuses and remembers nothing.
 - DRM (Netflix, Spotify), fullscreen, pointer and keyboard lock, clipboard
   writes, speaker selection and storage access are allowed without asking
   (Electron allows third-party cookies anyway). Anything else is refused.
 - Private windows keep their decisions in memory, forgotten when the last
   private window closes, together with the session's data and its ad
   blocker hooks.
-- A window or tab that closes answers its waiting prompts "dismiss".
+- A window or tab that closes answers its waiting prompts "dismiss" (the
+  answer goes to Electron before the prompt leaves the screen, and a closing
+  window redraws nothing).
 
 ### Address input (`src/main/url.js`)
 
@@ -460,9 +475,11 @@ settings page, waits for the page preload's internal API (`info`) and the UI
 view's `window.sn`, prints `supernova: smoke ok {...}` and exits 0, or prints
 `supernova: smoke FAILED <why>` and exits 1. It also checks that a web page
 can neither navigate itself to `supernova://settings`, nor open it with
-`window.open`, nor load it in an iframe. `tools/smoke.sh` runs it headless
-with a throwaway profile and an empty environment, in CI and in the PKGBUILD's
-`check()`.
+`window.open`, nor load it in an iframe, and that a fresh profile starts on the
+uncovered welcome page. `tools/smoke.sh` runs it headless with a throwaway
+profile and an empty environment, in CI and in the PKGBUILD's `check()`, then
+checks that the first start wrote `settings.json` (else every start would be
+a first one) and that a page named on the command line opens.
 
 ## IPC between the UI view and the main process (core)
 

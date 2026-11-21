@@ -523,7 +523,9 @@ app.whenReady().then(async () => {
   const userData = app.getPath('userData');
   const firstRun = !fs.existsSync(path.join(userData, 'settings.json')); // sync-ok: startup
   const settings = new JsonStore(path.join(userData, 'settings.json'), DEFAULTS);
-  if (firstRun) settings.set('tabs.position', settings.get('tabs.position'));
+  // The first start is the one with no settings.json: write it at once, or
+  // the welcome page comes back on every start until a setting changes.
+  if (firstRun) { settings.replace({ ...settings.data }); settings.flushSync(); } // sync-ok: startup, one small file
   sessionStore = new JsonStore(path.join(userData, 'session.json'), {}, { delay: 500 });
   power = createPower(powerMonitor);
   themeWatcher = new ThemeWatcher({ prefersDark: () => nativeTheme.shouldUseDarkColors });

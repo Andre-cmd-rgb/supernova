@@ -64,6 +64,19 @@ test('JsonStore: the files are private, and a write at quit is never undone by a
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 });
 
+test('JsonStore: a failed write is reported once, and the next flush writes again', async () => {
+  const dir = tmp();
+  const blocker = path.join(dir, 'profile');
+  fs.writeFileSync(blocker, ''); // a file where the folder should be
+  const s = new JsonStore(path.join(blocker, 'settings.json'), {}, { delay: 5 });
+  s.set('k', 1);
+  await assert.rejects(s.flush());
+  fs.rmSync(blocker);
+  await s.flush();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(blocker, 'settings.json'), 'utf8')).k, 1);
+  await s.flush(); // nothing new: resolves without writing
+});
+
 test('theme: Nova colors.toml is read, bad values fall back', () => {
   const dir = tmp();
   fs.mkdirSync(path.join(dir, 'theme'));

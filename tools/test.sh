@@ -12,6 +12,10 @@ chmod 700 "$tmp/run"
 node_bin="$(command -v node)"
 cd "$root"
 [ $# -eq 0 ] && set -- test/*.test.js
+# The one variable let through: SN_SKIP_ELECTRON_TESTS=1 skips the tests that
+# start Electron (test/autofill.test.js).
+pass=()
+[ -n "${SN_SKIP_ELECTRON_TESTS:-}" ] && pass+=("SN_SKIP_ELECTRON_TESTS=$SN_SKIP_ELECTRON_TESTS")
 # Not exec: the EXIT trap must run to remove the throwaway dirs.
 env -i \
   PATH="$(dirname "$node_bin"):/usr/bin:/bin" \
@@ -21,4 +25,5 @@ env -i \
   DBUS_SESSION_BUS_ADDRESS="unix:path=$tmp/run/no-bus" \
   DBUS_SYSTEM_BUS_ADDRESS="unix:path=$tmp/run/no-system-bus" \
   LANG=C.UTF-8 TZ=UTC \
+  ${pass[@]+"${pass[@]}"} \
   "$node_bin" --test "$@"

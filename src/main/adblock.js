@@ -619,11 +619,25 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
   // The page is the frame that asked, as the main process sees it: the URL in
   // the message is the renderer's word, and the frame may have navigated (or
   // be gone) since. Top frames only: the styles go to the whole tab.
+  // The URL of the frame that asks, if it is its tab's current main frame:
+  // a subframe or a fenced frame (no parent either) gets nothing, since the
+  // styles go into the main frame, and neither does a page on its way out.
+  // A frame that is gone throws when read: null too.
+  function mainFrameUrl(event) {
+    try {
+      const frame = event.senderFrame;
+      const main = event.sender && event.sender.mainFrame;
+      if (!frame || !main || frame.processId !== main.processId || frame.routingId !== main.routingId) return null;
+      return frame.url;
+    } catch {
+      return null;
+    }
+  }
+
   function onCosmetics(event, _claimedUrl, msg) {
+    const url = mainFrameUrl(event);
+    if (!url || !cosmeticsWanted(url)) return;
     const frame = event.senderFrame;
-    if (!frame || frame.parent) return;
-    const url = frame.url;
-    if (!cosmeticsWanted(url)) return;
     const { hostname, domain } = tldts.parse(url);
     const first = msg === undefined || msg === null;
     const { active, styles, scripts } = st.engine.getCosmeticsFilters({
@@ -640,18 +654,19 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
       getRulesFromDOM: !first,
     });
     if (!active) return;
-    const wc = event.sender;
-    if (styles.length > 0) Promise.resolve(wc.insertCSS(styles, { cssOrigin: 'user' })).catch(() => {});
+    // Either can be gone by now (and throw before returning a promise).
+    if (styles.length > 0) {
+      try { Promise.resolve(event.sender.insertCSS(styles, { cssOrigin: 'user' })).catch(() => {}); } catch {}
+    }
     if (scripts.length > 0) {
-      // To the frame that asked (not the tab's current main frame), and
-      // without a user gesture.
-      Promise.resolve(frame.executeJavaScript(wrapScriptlets(scripts), false)).catch(() => {});
+      // To the frame that asked, without a user gesture.
+      try { Promise.resolve(frame.executeJavaScript(wrapScriptlets(scripts), false)).catch(() => {}); } catch {}
     }
   }
 
   function observerWanted(event) {
-    const url = (event.senderFrame && event.senderFrame.url) || '';
-    return cosmeticsWanted(url) && st.engine.config.enableMutationObserver === true;
+    const url = mainFrameUrl(event);
+    return !!url && cosmeticsWanted(url) && st.engine.config.enableMutationObserver === true;
   }
 
   // --- sessions -----------------------------------------------------------------------

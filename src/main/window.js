@@ -94,7 +94,7 @@ class SnWindow extends EventEmitter {
     this.base.on('closed', () => {
       // A question still waiting (a permission, a password to save, a
       // sign-in) is answered "dismiss", so nothing hangs on a closed window.
-      for (const t of this.tabs) for (const p of this.ctx.pendingPrompts(t)) p.cancel();
+      for (const t of this.tabs) for (const p of this.ctx.pendingPrompts(t)) try { p.cancel(); } catch {}
       for (const t of this.tabs) t.destroy();
       clearTimeout(this._floatIdle);
       for (const v of [this.ui, this.float]) try { if (v) v.webContents.close(); } catch {}
@@ -341,6 +341,7 @@ class SnWindow extends EventEmitter {
   }
 
   _layoutFloat() {
+    if (this._closing || this.base.isDestroyed()) return;
     const needed = this._floatWanted();
     if (needed && !this.float) this._ensureFloat();
     const want = needed && this.floatSize.height > 0;
@@ -446,6 +447,7 @@ class SnWindow extends EventEmitter {
 
   removePrompt(id) {
     this.prompts = this.prompts.filter((p) => p.id !== id);
+    if (this._closing || this.base.isDestroyed()) return; // its prompts are being dismissed
     this.pushState();
     this._layoutFloat();
   }

@@ -1,7 +1,9 @@
 'use strict';
 // Site permissions: a short prompt above the page for what a site may not
 // simply take (camera, microphone, screen, location, notifications, opening
-// other apps, writing to a file); remembered per site. DRM (Netflix,
+// other apps, writing to a file); remembered per site, except the screen and
+// other apps (asked each time; a Block sticks) and file writes (while the
+// browser runs). DRM (Netflix,
 // Spotify) and fullscreen are allowed without asking, as in Chrome. Storage
 // access is allowed too: Electron does not block third-party cookies, so it
 // grants nothing a frame does not have already.
@@ -61,7 +63,10 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
   let nextId = 1;
   const pending = new Set();
   const sessionDecisions = new Map(); // private windows: forgotten on close
-  const fileWrites = new Set(); // "<origin> <path>" the user let a site write, this run
+  // "<origin> <path>" the user let a site write, while the browser runs;
+  // private windows' apart, forgotten with their other decisions.
+  const fileWrites = { normal: new Set(), private: new Set() };
+  const writesOf = (isPrivate) => (isPrivate ? fileWrites.private : fileWrites.normal);
 
   function stored(isPrivate) {
     return isPrivate ? null : settings.get('permissions') || {};
@@ -83,7 +88,8 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
 
   function prompt(wc, origin, permission, details, text) {
     const found = findTab(wc);
-    if (!found) return Promise.resolve('deny');
+    // No tab to ask in (it just closed): refused, nothing remembered.
+    if (!found) return Promise.resolve('dismiss');
     const { win, tab } = found;
     return new Promise((resolve) => {
       const id = `perm-${nextId++}`;
@@ -94,8 +100,10 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
           id, kind: 'permission', host: displayHost(origin) || origin, text,
           actions: [{ id: 'deny', label: 'Block' }, { id: 'allow', label: 'Allow', primary: true }],
         },
-        resolve: (action) => { pending.delete(p); win.removePrompt(id); resolve(action === 'allow' ? 'allow' : 'deny'); },
-        cancel: () => { pending.delete(p); win.removePrompt(id); resolve('dismiss'); },
+        // Answered first, then taken off screen: Electron's callback is never
+        // left waiting on the UI.
+        resolve: (action) => { pending.delete(p); resolve(action === 'allow' ? 'allow' : 'deny'); win.removePrompt(id); },
+        cancel: () => { pending.delete(p); resolve('dismiss'); win.removePrompt(id); },
         tab,
       };
       pending.add(p);
@@ -108,18 +116,23 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
     session.setPermissionRequestHandler(async (wc, permission, callback, details) => {
       const origin = originOf(details.requestingUrl || (wc && wc.getURL()) || '');
       if (ALWAYS.has(permission)) return callback(true);
-      // File System Access: reading what the user picked in the file chooser
-      // is the pick itself; writing to it is asked once per file per run.
+      // File System Access: reading a file or folder the user picked (in the
+      // file chooser, by dropping it, or on an earlier visit) is the pick
+      // itself; anything else, writing to it, is asked once per file while
+      // the browser runs.
       if (permission === 'fileSystem') {
         if (!origin) return callback(false);
-        if (details.fileAccessType !== 'writable') return callback(true);
-        const key = `${origin} ${details.filePath || ''}`;
-        if (fileWrites.has(key)) return callback(true);
-        const name = path.basename(details.filePath || '') || 'a file';
-        const answer = await prompt(wc, origin, 'fileSystem', details, `wants to save changes to ${name}`);
-        if (answer === 'allow') fileWrites.add(key);
+        if (details.fileAccessType === 'readable') return callback(true);
+        const file = details.filePath || '';
+        const writes = writesOf(isPrivate);
+        if (file && writes.has(`${origin} ${file}`)) return callback(true);
+        const answer = await prompt(wc, origin, 'fileSystem', details, `wants to save changes to ${path.basename(file) || 'a file'}`);
+        if (answer === 'allow' && file) writes.add(`${origin} ${file}`);
         return callback(answer === 'allow');
       }
+      // getDisplayMedia comes here first, then to the display handler below,
+      // which does the asking (Electron 45, probed): here only a Block counts.
+      if (permission === 'display-capture') return callback(!!origin && decision(origin, 'display-capture', isPrivate) !== 'deny');
       if (!ASK.has(permission) || !origin) return callback(false);
       const keys = keysFor(permission, details);
       const known = keys.map((k) => decision(origin, k, isPrivate));
@@ -143,12 +156,14 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
       const origin = originOf(requestingOrigin || (details && details.requestingUrl) || '');
       if (!origin) return false;
       if (permission === 'fileSystem') {
-        if (!details || details.fileAccessType !== 'writable') return true;
-        return fileWrites.has(`${origin} ${details.filePath || ''}`);
+        if (details && details.fileAccessType === 'readable') return true;
+        const file = (details && details.filePath) || '';
+        return !!file && writesOf(isPrivate).has(`${origin} ${file}`);
       }
-      // enumerateDevices asks about "unknown": a site allowed the camera or
-      // the microphone gets the devices' names (Zoom's and Meet's pickers).
-      if (permission === 'media' && details && details.mediaType === 'unknown') {
+      // enumerateDevices checks "audio" and "video" one by one (the devices'
+      // names); Chromium's own checks after getUserMedia come with no type
+      // (Electron 45, probed): a site allowed either device passes those.
+      if (permission === 'media' && (!details || !details.mediaType || details.mediaType === 'unknown')) {
         return ['media-video', 'media-audio'].some((k) => decision(origin, k, isPrivate) === 'allow');
       }
       const keys = permission === 'media' ? [`media-${(details && details.mediaType) || 'audio'}`] : [permission];
@@ -159,9 +174,10 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
     // Chrome (on X11 nothing else would ask before the screen is shared; on
     // Wayland the desktop portal's picker follows). "Block" sticks.
     session.setDisplayMediaRequestHandler(async (request, callback) => {
-      const wc = request.frame && request.frame.top ? webContentsOfFrame(request.frame) : null;
-      const origin = originOf(request.securityOrigin || (request.frame && request.frame.url) || '');
       try {
+        // A frame can be gone by now: reading it may throw.
+        const wc = request.frame && request.frame.top ? webContentsOfFrame(request.frame) : null;
+        const origin = originOf(request.securityOrigin || (request.frame && request.frame.url) || '');
         // No origin (a sandboxed frame, an opaque one): nobody to ask about.
         if (!origin) return callback({});
         if (decision(origin, 'display-capture', isPrivate) === 'deny') return callback({});
@@ -188,17 +204,23 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
   return {
     attach,
     /** The last private window closed: its decisions go with it. */
-    forgetPrivate() { sessionDecisions.clear(); },
+    forgetPrivate() { sessionDecisions.clear(); fileWrites.private.clear(); },
     respond(id, action) {
       for (const p of pending) if (p.id === id) { p.resolve(action); return true; }
       return false;
     },
     pendingFor(tab) { return [...pending].filter((p) => p.tab === tab); },
-    forSite(origin) { return (stored(false) || {})[origin] || {}; },
+    forSite(origin) {
+      const site = { ...((stored(false) || {})[origin] || {}) };
+      // Beta 1 remembered "allow" for the screen, which is asked every time now.
+      if (site['display-capture'] === 'allow') delete site['display-capture'];
+      return site;
+    },
     reset(origin) {
       const all = { ...stored(false) };
       delete all[origin];
       settings.set('permissions', all);
+      for (const key of [...fileWrites.normal]) if (key.startsWith(`${origin} `)) fileWrites.normal.delete(key);
     },
   };
 }

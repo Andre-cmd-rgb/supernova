@@ -55,7 +55,9 @@ class Tab extends EventEmitter {
     this.view = null;
     this.hoverUrl = '';
     this.zoom = 1;
-    this.lastShown = Date.now();
+    this.lastShown = Date.now(); // the command bar's recent tabs
+    this.idleSince = Date.now(); // the sleep timers: hidden and quiet since
+    this._lifeGen = 0; // bumped when shown or hidden: a freeze on its way checks it
     this.canGoBack = false;
     this.canGoForward = false;
     this.find = null;
@@ -160,7 +162,8 @@ class Tab extends EventEmitter {
   /** Called when the tab becomes the visible one. */
   async shown() {
     this._visible = true;
-    this.lastShown = Date.now();
+    this._lifeGen++;
+    this.lastShown = this.idleSince = Date.now();
     this._clearTimers();
     if (this.frozen) await this._setLifecycle('active');
   }
@@ -168,15 +171,17 @@ class Tab extends EventEmitter {
   /** Called when the tab is hidden: schedule freeze, then discard. */
   hidden() {
     this._visible = false;
-    this.lastShown = Date.now();
+    this._lifeGen++;
+    this.lastShown = this.idleSince = Date.now();
     this.reschedule();
   }
 
   // Playing or sound started or stopped. A hidden tab's sleep timers count
   // from when it went quiet, not from when it was last shown: music paused
-  // after an hour in the background must not discard the tab at once.
+  // after an hour in the background must not discard the tab at once. (The
+  // command bar's order, lastShown, stays as it was.)
   _activityChanged() {
-    if (!this._visible && !this._busy()) this.lastShown = Date.now();
+    if (!this._visible && !this._busy()) this.idleSince = Date.now();
     this.reschedule();
   }
 
@@ -185,7 +190,7 @@ class Tab extends EventEmitter {
     this._clearTimers();
     if (this._visible || this.pinned || !this.live) return;
     const p = this._hooks && this._hooks.policy ? this._hooks.policy() : { freezeMs: 600000, discardMs: 7200000 };
-    const elapsed = Date.now() - this.lastShown;
+    const elapsed = Date.now() - this.idleSince;
     if (!this.frozen && p.freezeMs > 0) {
       this._timers.push(setTimeout(() => this.freeze(), Math.max(0, p.freezeMs - elapsed)));
     }
@@ -207,9 +212,12 @@ class Tab extends EventEmitter {
 
   async freeze() {
     if (!this.live || this.frozen || this._visible || this._busy()) return;
+    const gen = this._lifeGen;
     if (await this._setLifecycle('frozen')) {
-      // Shown (or started playing) while the freeze was on its way: undo it.
-      if (this._visible || this._busy()) { await this._setLifecycle('active'); return; }
+      if (!this.live) return; // discarded or closed meanwhile
+      // Shown (even if hidden again), or started playing, while the freeze
+      // was on its way: undo it; the timers freeze it again later.
+      if (gen !== this._lifeGen || this._visible || this._busy()) { await this._setLifecycle('active'); return; }
       this.frozen = true;
       this.emit('changed', this);
     }

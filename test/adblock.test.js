@@ -680,7 +680,8 @@ test('a second (private) session is hooked too, with the ipcMain handlers regist
   // Cosmetics answer for both sessions.
   for (const s of [ses, priv]) {
     const wc = fakeTab(31, 'https://news.example/', s);
-    await w.ipc.invoke(COSMETICS, { sender: wc, senderFrame: { url: 'https://news.example/', executeJavaScript: wc.executeJavaScript } }, 'https://news.example/');
+    wc.mainFrame = { url: 'https://news.example/', processId: 3, routingId: 1, executeJavaScript: wc.executeJavaScript };
+    await w.ipc.invoke(COSMETICS, { sender: wc, senderFrame: wc.mainFrame }, 'https://news.example/');
     assert.equal(wc.css.length, 1);
   }
 
@@ -700,10 +701,12 @@ test('a second (private) session is hooked too, with the ipcMain handlers regist
   assert.equal(w.logs.filter(([l]) => l === 'error').length, 0);
 });
 
-/** The event of the library's preload, which runs in top frames only. */
+/** The event of the library's preload, which runs in top frames only: sent
+ *  by the tab's main frame (same process and routing id). */
 function cosmeticEvent(ses, url) {
   const wc = fakeTab(40, url, ses);
-  const frame = { url, scripts: [], executeJavaScript: async (code, gesture) => { frame.scripts.push({ code, gesture }); } };
+  const frame = { url, processId: 1, routingId: 1, scripts: [], executeJavaScript: async (code, gesture) => { frame.scripts.push({ code, gesture }); } };
+  wc.mainFrame = frame;
   return { wc, frame, event: { sender: wc, senderFrame: frame, frameId: 1, processId: 1 } };
 }
 
@@ -740,12 +743,24 @@ test('cosmetic IPC trusts the frame, not the message: its URL, top frames only, 
   await w.ipc.invoke(COSMETICS, liar.event, 'https://news.example/article');
   assert.ok(liar.wc.css.every(({ css }) => !/ad-banner/.test(css)));
   assert.equal(liar.frame.scripts.length, 0);
-  // A subframe of the news site: nothing (the styles would land in the top frame).
+  // A subframe (or a fenced frame) of the news site: nothing (the styles
+  // would land in the top frame).
   const sub = cosmeticEvent(ses, 'https://news.example/article');
-  sub.frame.parent = { url: 'https://host.example/' };
+  sub.wc.mainFrame = { url: 'https://host.example/', processId: 1, routingId: 2 };
   await w.ipc.invoke(COSMETICS, sub.event, 'https://news.example/article');
   assert.deepEqual(sub.wc.css, []);
   assert.deepEqual(sub.frame.scripts, []);
+  assert.equal(await w.ipc.invoke(OBSERVER, sub.event), false);
+  // The page on its way out while the next one is already the main frame.
+  const old = cosmeticEvent(ses, 'https://news.example/article');
+  old.wc.mainFrame = { url: 'https://news.example/next', processId: 2, routingId: 1 };
+  await w.ipc.invoke(COSMETICS, old.event, 'https://news.example/article');
+  assert.deepEqual(old.wc.css, []);
+  // A frame already disposed throws when read: no answer, no crash.
+  const disposed = cosmeticEvent(ses, 'https://news.example/article');
+  Object.defineProperty(disposed.frame, 'url', { get() { throw new Error('Render frame was disposed'); } });
+  await w.ipc.invoke(COSMETICS, disposed.event, 'https://news.example/article');
+  assert.deepEqual(disposed.wc.css, []);
   // The frame went away before the message arrived.
   const gone = cosmeticEvent(ses, 'https://news.example/article');
   gone.event.senderFrame = null;

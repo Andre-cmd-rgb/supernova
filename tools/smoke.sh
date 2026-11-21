@@ -3,7 +3,8 @@
 #
 #   1. SUPERNOVA_SMOKE=1: the browser checks its page preload, internal API
 #      and UI itself (smokeTest() in src/main/main.js) and prints
-#      "supernova: smoke ok".
+#      "supernova: smoke ok". The first start must have written settings.json,
+#      or every start would be a first one (the welcome page each time).
 #   2. A page named on the command line, as `supernova <file>` opens one: its
 #      title must reach the saved session, so the argument was read (a packaged
 #      build slices argv differently from `electron .`) and the page loaded.
@@ -86,6 +87,7 @@ if ! line=$(grep -m1 '^supernova: smoke ok' "$log"); then
   die "the browser's check failed (exit $status)"
 fi
 echo "smoke: $line"
+[[ -s $profile/settings.json ]] || die "the first start wrote no settings.json: every start would show the welcome page"
 
 # 2. A page from the command line. The title is only in the page, not in its
 # path, so seeing it in session.json means the page itself was loaded. The

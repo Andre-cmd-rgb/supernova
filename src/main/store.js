@@ -87,9 +87,11 @@ class JsonStore extends EventEmitter {
       try {
         await fs.promises.mkdir(path.dirname(this.file), { recursive: true });
         await fs.promises.writeFile(tmp, body, { mode: 0o600 });
-        // flushSync (quitting) may have saved newer data meanwhile.
+        // flushSync (quitting) may have saved newer data meanwhile. The check
+        // and the rename happen in one go on this thread: an async rename
+        // could still land after a flushSync and put older data back.
         if (this._savedGen >= gen) { await fs.promises.unlink(tmp); return; }
-        await fs.promises.rename(tmp, this.file);
+        fs.renameSync(tmp, this.file); // sync-ok: one rename, atomic with the check above
         this._savedGen = Math.max(this._savedGen, gen);
       } catch (err) {
         fs.promises.unlink(tmp).catch(() => {});
@@ -100,14 +102,13 @@ class JsonStore extends EventEmitter {
     return this._writing;
   }
 
+  /** Resolves once everything changed so far is on disk; rejects if the
+   *  last attempt to write it failed. */
   async flush() {
-    if (this._timer) {
-      clearTimeout(this._timer);
-      this._timer = null;
-      await this._write();
-    } else if (this._writing) {
-      await this._writing;
-    }
+    clearTimeout(this._timer);
+    this._timer = null;
+    if (this._writing) await this._writing.catch(() => {}); // an earlier failure is not this one
+    if (this._savedGen < this._gen) await this._write();
   }
 
   /** Synchronous last-chance write, for quitting: also when an async write
