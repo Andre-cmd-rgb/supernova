@@ -41,13 +41,15 @@ class FakeView {
   setBackgroundColor() {}
 }
 
-// tab.js loads Electron at the top; give it the fake view instead.
+// tab.js loads Electron at the top; give it the fake view instead, for this
+// one require, and drop the module afterwards so nothing else gets it.
 const load = Module._load;
 Module._load = function (request, ...rest) {
   return request === 'electron' ? { WebContentsView: FakeView } : load.call(this, request, ...rest);
 };
-const { Tab } = require('../src/main/tab');
-Module._load = load;
+let Tab;
+try { ({ Tab } = require('../src/main/tab')); } finally { Module._load = load; }
+test.after(() => { delete require.cache[require.resolve('../src/main/tab')]; });
 
 const MIN = 60 * 1000;
 const policy = { freezeMs: 10 * MIN, discardMs: 120 * MIN };

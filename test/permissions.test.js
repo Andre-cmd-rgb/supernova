@@ -8,13 +8,13 @@ const { createPermissions } = require('../src/main/permissions');
 
 const SITE = 'https://meet.example';
 
-function setup({ persistent = true, noTab = false } = {}) {
-  const store = {};
+function setup({ persistent = true, noTab = false, saved } = {}) {
+  const store = saved ? { permissions: saved } : {};
   const settings = { get: (k) => store[k], set: (k, v) => { store[k] = v; } };
   const prompts = [];
   const tab = { id: 1 };
   const win = { addPrompt: (p) => prompts.push(p), removePrompt() {} };
-  const wc = { getURL: () => SITE + '/room' };
+  const wc = { id: 7, getURL: () => SITE + '/room' };
   const perms = createPermissions({
     settings,
     findTab: () => (noTab ? null : { win, tab }),
@@ -40,7 +40,7 @@ function setup({ persistent = true, noTab = false } = {}) {
     for (let i = 0; i < 20 && !prompts.length; i++) await new Promise((r) => setImmediate(r));
     const p = prompts.pop();
     assert.ok(p, 'a prompt was shown');
-    p.resolve(action);
+    if (action === 'dismiss') p.cancel(); else p.resolve(action);
     return p;
   };
   return { store, prompts, request, share, check, answer, perms };
@@ -91,48 +91,79 @@ test('a private window\'s file writes are its own and forgotten with it', async 
   assert.equal(s.check('fileSystem', { fileAccessType: 'writable', filePath: '/home/u/a.txt' }), false);
 });
 
-test('screen sharing is asked every time, and a block sticks', async () => {
+// getDisplayMedia, as Electron 45 runs it: the request handler (as
+// "display-capture"), then the display handler.
+async function getDisplayMedia(s, action) {
+  const asked = s.request('display-capture', { mediaTypes: ['video'] });
+  await s.answer(action);
+  if (!(await asked)) return 'refused';
+  return s.share();
+}
+
+test('screen sharing is asked once per share, never remembered; a block sticks', async () => {
   const s = setup();
-  // getDisplayMedia reaches the request handler first (as "display-capture"),
-  // then the display handler, which is the one that asks: one prompt, not two.
-  assert.equal(await s.request('display-capture', { mediaTypes: ['video'] }), true);
-  assert.equal(s.prompts.length, 0);
-  let r = s.share();
-  await s.answer('allow');
-  assert.deepEqual(await r, { video: { id: 'screen:0' } });
+  assert.deepEqual(await getDisplayMedia(s, 'allow'), { video: { id: 'screen:0' } });
+  assert.equal(s.prompts.length, 0, 'one prompt per share, not two');
+  assert.deepEqual(await getDisplayMedia(s, 'allow'), { video: { id: 'screen:0' } }, 'asked again: an allow is not remembered');
+  assert.equal(s.check('display-capture'), false, 'never reported as granted');
 
-  r = s.share();
-  await s.answer('allow');
-  assert.deepEqual(await r, { video: { id: 'screen:0' } }, 'asked again: an allow is not remembered');
-
-  r = s.share();
-  await s.answer('deny');
-  assert.deepEqual(await r, {});
-  assert.deepEqual(await s.share(), {}, 'blocked without asking');
-  assert.equal(s.prompts.length, 0);
+  assert.equal(await getDisplayMedia(s, 'deny'), 'refused');
   assert.equal(s.store.permissions[SITE]['display-capture'], 'deny');
-  assert.equal(await s.request('display-capture', { mediaTypes: ['video'] }), false);
+  assert.equal(await s.request('display-capture', { mediaTypes: ['video'] }), false, 'blocked without asking');
+  assert.equal(await s.share(), null);
+  assert.equal(s.prompts.length, 0);
 });
 
-test('an allow for the screen saved by beta 1 is neither used nor shown', async () => {
+test('getUserMedia for the desktop is asked too: it never reaches the display handler', async () => {
+  // chromeMediaSource: "desktop" captures on a yes from the request handler
+  // alone, with the same details as getDisplayMedia.
   const s = setup();
-  s.store.permissions = { [SITE]: { 'display-capture': 'allow', geolocation: 'allow' } };
-  assert.deepEqual(s.perms.forSite(SITE), { geolocation: 'allow' });
+  const r = s.request('display-capture', { mediaTypes: ['video'] });
+  const p = await s.answer('deny');
+  assert.match(p.public.text, /see your screen/);
+  assert.equal(await r, false);
+});
+
+test('the request handler\'s yes is good for one share, for that site, for seconds', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 });
+  const s = setup();
+  const asked = s.request('display-capture', { mediaTypes: ['video'] });
+  await s.answer('allow');
+  assert.equal(await asked, true);
+  t.mock.timers.tick(11000);
+  const late = s.share();
+  await s.answer('dismiss'); // too late: asked again
+  assert.equal(await late, null);
+
+  const again = s.request('display-capture', { mediaTypes: ['video'] });
+  await s.answer('allow');
+  await again;
+  const other = s.share('https://other.example');
+  await s.answer('dismiss'); // another site: asked
+  assert.equal(await other, null);
+  const used = s.share();
+  await s.answer('dismiss'); // the grant went with the first share that came
+  assert.equal(await used, null);
+});
+
+test('an allow for the screen saved by beta 1 is dropped at start', async () => {
+  const s = setup({ saved: { [SITE]: { 'display-capture': 'allow', geolocation: 'allow' }, 'https://x.example': { 'display-capture': 'allow' } } });
+  assert.deepEqual(s.store.permissions, { [SITE]: { geolocation: 'allow' } });
   const r = s.share();
   await s.answer('deny');
-  assert.deepEqual(await r, {});
+  assert.equal(await r, null);
 });
 
 test('a prompt with no tab to show it in refuses and remembers nothing', async () => {
   const s = setup({ noTab: true });
   assert.equal(await s.request('geolocation'), false);
-  assert.deepEqual(await s.share(), {});
+  assert.equal(await s.share(), null);
   assert.equal(s.store.permissions, undefined);
 });
 
 test('a frame with no origin never gets the screen', async () => {
   const s = setup();
-  assert.deepEqual(await s.share('null'), {});
+  assert.equal(await s.share('null'), null);
   assert.equal(s.prompts.length, 0);
 });
 
@@ -145,9 +176,9 @@ test('camera and microphone checks, as Electron 45 makes them', async () => {
   // enumerateDevices: one check per kind, for the devices' names.
   assert.equal(s.check('media', { mediaType: 'video' }), true);
   assert.equal(s.check('media', { mediaType: 'audio' }), false);
-  // Chromium's own checks after getUserMedia carry no type.
-  assert.equal(s.check('media', {}), true);
-  assert.equal(s.check('media', { mediaType: 'unknown' }), true);
+  // The check with no type is camera pan/tilt/zoom: never granted.
+  assert.equal(s.check('media', {}), false);
+  assert.equal(s.check('media', { mediaType: 'unknown' }), false);
 });
 
 test('private windows remember nothing on disk and forget on close', async () => {

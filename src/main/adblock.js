@@ -616,10 +616,8 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     return st.engine !== null && st.enabled && typeof url === 'string' && /^https?:/.test(url) && isActiveFor(url);
   }
 
-  // The page is the frame that asked, as the main process sees it: the URL in
-  // the message is the renderer's word, and the frame may have navigated (or
-  // be gone) since. Top frames only: the styles go to the whole tab.
-  // The URL of the frame that asks, if it is its tab's current main frame:
+  // The URL of the frame that asks (never the URL in the message: that is the
+  // renderer's word), if it is its tab's current main frame:
   // a subframe or a fenced frame (no parent either) gets nothing, since the
   // styles go into the main frame, and neither does a page on its way out.
   // A frame that is gone throws when read: null too.

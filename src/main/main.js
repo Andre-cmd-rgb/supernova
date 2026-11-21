@@ -521,11 +521,12 @@ app.on('login', (event, wc, details, authInfo, callback) => {
 app.whenReady().then(async () => {
   const t0 = Date.now();
   const userData = app.getPath('userData');
-  const firstRun = !fs.existsSync(path.join(userData, 'settings.json')); // sync-ok: startup
-  const settings = new JsonStore(path.join(userData, 'settings.json'), DEFAULTS);
-  // The first start is the one with no settings.json: write it at once, or
-  // the welcome page comes back on every start until a setting changes.
-  if (firstRun) { settings.replace({ ...settings.data }); settings.flushSync(); } // sync-ok: startup, one small file
+  const settingsFile = path.join(userData, 'settings.json');
+  const settings = new JsonStore(settingsFile, DEFAULTS);
+  // A first start has no settings.json; after the store, so a broken one it
+  // set aside makes this a first start too. Written once the welcome page is
+  // up (below), or every start would be a first one.
+  const firstRun = !fs.existsSync(settingsFile); // sync-ok: startup
   sessionStore = new JsonStore(path.join(userData, 'session.json'), {}, { delay: 500 });
   power = createPower(powerMonitor);
   themeWatcher = new ThemeWatcher({ prefersDark: () => nativeTheme.shouldUseDarkColors });
@@ -615,7 +616,13 @@ app.whenReady().then(async () => {
     for (const u of urls.slice(1)) w.newTab({ url: u });
     // First start: the welcome page (import from Chrome). If a link opened
     // the browser, that link stays in front and the welcome waits beside it.
-    if (firstRun) ctx.openSettings(w, '#welcome', { background: urls.length > 0 });
+    if (firstRun) {
+      ctx.openSettings(w, '#welcome', { background: urls.length > 0 });
+      // Now this profile has started once (a private first start shows no
+      // welcome page, so it does not count).
+      settings.replace({ ...settings.data });
+      try { settings.flushSync(); } catch (err) { console.error('supernova: could not save settings.json:', err.message); } // sync-ok: once, the first start
+    }
   }
 
   if (services.adblock && services.adblock.scheduleUpdate) services.adblock.scheduleUpdate();

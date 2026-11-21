@@ -3,7 +3,7 @@
 // simply take (camera, microphone, screen, location, notifications, opening
 // other apps, writing to a file); remembered per site, except the screen and
 // other apps (asked each time; a Block sticks) and file writes (while the
-// browser runs). DRM (Netflix,
+// browser runs). Camera pan/tilt/zoom is never granted. DRM (Netflix,
 // Spotify) and fullscreen are allowed without asking, as in Chrome. Storage
 // access is allowed too: Electron does not block third-party cookies, so it
 // grants nothing a frame does not have already.
@@ -16,7 +16,7 @@ const ALWAYS = new Set([
   'speaker-selection', 'storage-access', 'top-level-storage-access',
 ]);
 const ASK = new Set([
-  'media', 'display-capture', 'geolocation', 'notifications', 'midiSysex', 'midi',
+  'media', 'geolocation', 'notifications', 'midiSysex', 'midi',
   'idle-detection', 'window-management', 'openExternal', 'clipboard-read',
 ]);
 
@@ -67,6 +67,11 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
   // private windows' apart, forgotten with their other decisions.
   const fileWrites = { normal: new Set(), private: new Set() };
   const writesOf = (isPrivate) => (isPrivate ? fileWrites.private : fileWrites.normal);
+  // Screen sharing asked and allowed in the request handler: the display
+  // handler that follows for the same tab and site skips its own prompt,
+  // once, within SCREEN_GRANT_MS. webContents id -> { origin, until }
+  const screenGrants = new Map();
+  const SCREEN_GRANT_MS = 10000;
 
   function stored(isPrivate) {
     return isPrivate ? null : settings.get('permissions') || {};
@@ -130,9 +135,20 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
         if (answer === 'allow' && file) writes.add(`${origin} ${file}`);
         return callback(answer === 'allow');
       }
-      // getDisplayMedia comes here first, then to the display handler below,
-      // which does the asking (Electron 45, probed): here only a Block counts.
-      if (permission === 'display-capture') return callback(!!origin && decision(origin, 'display-capture', isPrivate) !== 'deny');
+      // The screen. getDisplayMedia comes here first, then to the display
+      // handler below; getUserMedia with chromeMediaSource "desktop" comes
+      // only here and captures on a yes (Electron 45, probed), and the two
+      // look the same. So it is asked here; a yes lets the display handler
+      // skip its prompt once. A Block sticks; a yes is never kept.
+      if (permission === 'display-capture') {
+        if (!origin || decision(origin, 'display-capture', isPrivate) === 'deny') return callback(false);
+        const answer = await prompt(wc, origin, permission, details, `wants to ${describe(permission, details)}`);
+        if (answer === 'deny') remember(origin, ['display-capture'], 'deny', isPrivate);
+        if (answer !== 'allow') return callback(false);
+        if (wc) screenGrants.set(wc.id, { origin, until: Date.now() + SCREEN_GRANT_MS });
+        mark(wc, permission);
+        return callback(true);
+      }
       if (!ASK.has(permission) || !origin) return callback(false);
       const keys = keysFor(permission, details);
       const known = keys.map((k) => decision(origin, k, isPrivate));
@@ -160,12 +176,13 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
         const file = (details && details.filePath) || '';
         return !!file && writesOf(isPrivate).has(`${origin} ${file}`);
       }
-      // enumerateDevices checks "audio" and "video" one by one (the devices'
-      // names); Chromium's own checks after getUserMedia come with no type
-      // (Electron 45, probed): a site allowed either device passes those.
-      if (permission === 'media' && (!details || !details.mediaType || details.mediaType === 'unknown')) {
-        return ['media-video', 'media-audio'].some((k) => decision(origin, k, isPrivate) === 'allow');
-      }
+      // Asked every time: never reported as granted.
+      if (permission === 'display-capture') return false;
+      // enumerateDevices and permissions.query check "audio" and "video"; the
+      // check with no type is camera pan/tilt/zoom (Electron 45, probed),
+      // which Chrome asks for apart and nothing here offers: refused. The
+      // camera still works, without pan/tilt/zoom.
+      if (permission === 'media' && (!details || !details.mediaType || details.mediaType === 'unknown')) return false;
       const keys = permission === 'media' ? [`media-${(details && details.mediaType) || 'audio'}`] : [permission];
       return keys.every((k) => decision(origin, k, isPrivate) === 'allow');
     });
@@ -174,25 +191,47 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
     // Chrome (on X11 nothing else would ask before the screen is shared; on
     // Wayland the desktop portal's picker follows). "Block" sticks.
     session.setDisplayMediaRequestHandler(async (request, callback) => {
+      // Refused with null: Electron 45 throws on {} when video was asked for.
+      let answered = false;
+      const answer = (streams) => { if (!answered) { answered = true; callback(streams); } };
       try {
         // A frame can be gone by now: reading it may throw.
         const wc = request.frame && request.frame.top ? webContentsOfFrame(request.frame) : null;
         const origin = originOf(request.securityOrigin || (request.frame && request.frame.url) || '');
         // No origin (a sandboxed frame, an opaque one): nobody to ask about.
-        if (!origin) return callback({});
-        if (decision(origin, 'display-capture', isPrivate) === 'deny') return callback({});
-        // No tab to ask in: refused, but nothing remembered.
-        const answer = wc ? await prompt(wc, origin, 'display-capture', {}, 'wants to see your screen') : 'dismiss';
-        if (answer === 'deny') remember(origin, ['display-capture'], 'deny', isPrivate);
-        if (answer !== 'allow') return callback({});
+        if (!origin) return answer(null);
+        if (decision(origin, 'display-capture', isPrivate) === 'deny') return answer(null);
+        const grant = wc ? screenGrants.get(wc.id) : null;
+        if (wc) screenGrants.delete(wc.id);
+        let allowed = !!grant && grant.origin === origin && grant.until >= Date.now();
+        if (!allowed) {
+          // No tab to ask in: refused, but nothing remembered.
+          const reply = wc ? await prompt(wc, origin, 'display-capture', {}, 'wants to see your screen') : 'dismiss';
+          if (reply === 'deny') remember(origin, ['display-capture'], 'deny', isPrivate);
+          allowed = reply === 'allow';
+        }
+        if (!allowed) return answer(null);
         const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } });
-        if (!sources.length) return callback({});
+        if (!sources.length) return answer(null);
         if (wc) mark(wc, 'display-capture');
-        callback({ video: sources[0] });
+        answer({ video: sources[0] });
       } catch {
-        callback({});
+        try { answer(null); } catch {}
       }
     });
+  }
+
+  // Beta 1 remembered "allow" for the screen, which is asked every time now:
+  // gone from settings (and from the settings page's list) at start.
+  const all = stored(false);
+  const legacy = Object.keys(all).filter((o) => all[o] && all[o]['display-capture'] === 'allow');
+  if (legacy.length) {
+    const next = { ...all };
+    for (const o of legacy) {
+      const { 'display-capture': _gone, ...rest } = next[o];
+      if (Object.keys(rest).length) next[o] = rest; else delete next[o];
+    }
+    settings.set('permissions', next);
   }
 
   function mark(wc, permission) {
@@ -210,12 +249,6 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
       return false;
     },
     pendingFor(tab) { return [...pending].filter((p) => p.tab === tab); },
-    forSite(origin) {
-      const site = { ...((stored(false) || {})[origin] || {}) };
-      // Beta 1 remembered "allow" for the screen, which is asked every time now.
-      if (site['display-capture'] === 'allow') delete site['display-capture'];
-      return site;
-    },
     reset(origin) {
       const all = { ...stored(false) };
       delete all[origin];

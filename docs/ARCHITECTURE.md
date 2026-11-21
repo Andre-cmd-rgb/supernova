@@ -133,6 +133,11 @@ Writes go to a temporary file of their own and are renamed over the file, mode
 0600. A write that would land after a newer one (an async write still on its
 way when quitting saved newer data) is dropped.
 
+A first start is one with no `settings.json` (a broken one, set aside, counts
+too): it shows the welcome page (import from Chrome), and writes the file
+once that page is up, so a first start in a private window does not use it
+up.
+
 Settings keys (defaults, in `src/main/settings-schema.js`). The settings page
 may write only the keys it has a control for, with the values it offers
 (`WRITABLE` there; a test ties it to `settings.html`): never `downloads.dir`,
@@ -410,14 +415,19 @@ settings, findTab, desktopCapturer })` answers them, and
 
 - Camera, microphone, location, notifications, MIDI and the like are asked in
   a prompt over the page; Allow and Block are remembered per origin in the
-  `permissions` setting (camera and microphone apart). enumerateDevices
-  checks each kind for the devices' names; Chromium's own checks after
-  `getUserMedia` carry no kind, and pass for a site allowed either.
-- **Screen sharing** is asked every time; only Block is remembered (an Allow
-  saved by beta 1 is ignored and not shown). `getDisplayMedia` reaches the
-  permission request handler first, as `display-capture`, which only checks
-  for a Block, then the display-media handler, which asks: one prompt. A
-  frame with no origin never gets the screen.
+  `permissions` setting (camera and microphone apart). enumerateDevices and
+  `permissions.query` check each kind. The check with no kind is camera
+  pan/tilt/zoom, which is never granted (the camera works without it).
+- **Screen sharing** is asked every time; only Block is remembered, and it is
+  never reported as granted (beta 1's saved Allows are dropped at start).
+  `getDisplayMedia` reaches the permission request handler first, as
+  `display-capture`, then the display-media handler; `getUserMedia` with
+  `chromeMediaSource: "desktop"` reaches only the first and captures on its
+  yes, with the same details. So the request handler asks, and its yes lets
+  the display handler that follows for that tab and site skip its own
+  prompt once, within 10 s: one prompt either way. Refusals answer the
+  display handler with `null` (Electron 45 throws on `{}`). A frame with no
+  origin never gets the screen.
 - **Opening other apps** (`mailto:`, `zoommtg:`) is asked each time; a block
   sticks.
 - **Files a page was given** (the File System Access API): reading a file or
