@@ -6,9 +6,10 @@
 // allowlist, judges requests by their Referer, and gives every scriptlet a
 // user gesture.
 //
-// Costs (measured, see the report in docs or the agent B notes):
-//   - startup: read + deserialize the cached engine (~7 MB, ~10-15 ms);
-//   - per request: one main-thread call of ~10 us;
+// Costs (bench/adblock-cost.mjs, i7-11850H):
+//   - startup: read + deserialize the cached engine (~7 MB, ~11 ms);
+//   - per request: one main-thread call, p50 ~8 us, p99 ~50 us (long
+//     googlevideo.com segment URLs ~30 us);
 //   - list refresh: once a day, downloaded and parsed in a worker thread, so
 //     the main thread only pays the deserialize.
 //
@@ -25,7 +26,7 @@ const { isMainThread, workerData, parentPort } = require('node:worker_threads');
 // package itself, so this works however npm lays out node_modules.
 const ghosteryDir = path.dirname(require.resolve('@ghostery/adblocker-electron/package.json'));
 const ghostery = createRequire(path.join(ghosteryDir, 'package.json'));
-const { FiltersEngine, Request, adsAndTrackingLists, fullLists } = ghostery('@ghostery/adblocker');
+const { FiltersEngine, NetworkFilter, Request, adsAndTrackingLists, fullLists } = ghostery('@ghostery/adblocker');
 const tldts = ghostery('tldts-experimental');
 const PRELOAD_PATH = ghostery.resolve('@ghostery/adblocker-electron-preload');
 
@@ -55,6 +56,7 @@ const ENGINE_CONFIG = {
   loadExtendedSelectors: false, // procedural selectors: the preload cannot run them
   enableHtmlFiltering: false,
   enableMutationObserver: true,
+  integrityCheck: true, // the CRC that lets loadCached() reject a damaged cache
 };
 
 // Only network schemes reach the handlers (supernova://, file://, data:,
@@ -77,6 +79,21 @@ const SCHEME = Object.freeze({
 
 const COSMETICS_CHANNEL = '@ghostery/adblocker/inject-cosmetic-filters';
 const OBSERVER_CHANNEL = '@ghostery/adblocker/is-mutation-observer-enabled';
+
+function popcount(x) {
+  let n = 0;
+  for (let v = x >>> 0; v !== 0; v &= v - 1) n += 1;
+  return n;
+}
+
+// The engine stores `$~xhr` as "every type but xhr", document included, while
+// uBO never applies a negated type to pages. A filter written with positive
+// types holds at most half of the type bits (the library's own rule when it
+// prints a filter back), so that is what "names documents" means here.
+const TYPE_BITS = popcount(NetworkFilter.parse('||x.example^').getCptMask());
+function namesDocuments(filter) {
+  return filter.fromDocument() && popcount(filter.getCptMask()) * 2 <= TYPE_BITS;
+}
 
 function makeEnv() {
   const env = new Map();
@@ -103,7 +120,7 @@ function sleep(ms, { unref = false } = {}) {
 
 // ----- building an engine (worker thread or in-process) ------------------------
 
-async function fetchText(fetchImpl, url, timeoutMs, tries = 3) {
+async function fetchText(fetchImpl, url, { timeoutMs, retryPauseMs, cancelled, tries = 3 }) {
   for (let i = 1; ; i++) {
     try {
       const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
@@ -112,24 +129,35 @@ async function fetchText(fetchImpl, url, timeoutMs, tries = 3) {
       if (text.length === 0) throw new Error('empty response');
       return text;
     } catch (err) {
-      if (i >= tries) throw new Error(`${url}: ${err.message}`);
-      await sleep(1000 * i);
+      if (i >= tries || cancelled()) throw new Error(`${url}: ${err.message}`);
     }
+    await sleep(retryPauseMs * i);
+    if (cancelled()) throw new Error(`${url}: build cancelled`);
   }
 }
 
 /** Download the lists and resources, parse them, return the serialized
  *  engine (Uint8Array). CPU-heavy (~0.5 s): runs in a worker normally. */
-async function buildEngineBytes({ urls, resourcesUrl, timeoutMs, fetchImpl, concurrency = 4 }) {
+async function buildEngineBytes({ urls, resourcesUrl, timeoutMs, retryPauseMs = 1000, fetchImpl, concurrency = 4 }) {
   // A few connections at a time: a burst of 15 parallel downloads from
   // raw.githubusercontent.com regularly stalls the biggest files.
   const all = [...urls, resourcesUrl];
   const texts = new Array(all.length);
   let next = 0;
+  // One file that cannot be had fails the build: the other connections stop
+  // too, instead of downloading (and retrying) the rest for nothing while
+  // the next attempt is already scheduled.
+  let failed = false;
+  const cancelled = () => failed;
   const worker = async () => {
-    while (next < all.length) {
+    while (!failed && next < all.length) {
       const i = next++;
-      texts[i] = await fetchText(fetchImpl, all[i], timeoutMs);
+      try {
+        texts[i] = await fetchText(fetchImpl, all[i], { timeoutMs, retryPauseMs, cancelled });
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, all.length) }, worker));
@@ -212,8 +240,9 @@ function ensureIpc(ipcMain) {
  * now (Date.now), updateIntervalMs (1 day), startupDelayMs (1 min, first
  * refresh of a stale cache), retryMs (2 min, doubled per failure up to
  * retryMaxMs 1 h), initTimeoutMs (5 s, how long init() waits for a first-run
- * download), fetchTimeoutMs (20 s per file), lists ({ 'ads-tracking': [urls],
- * full: [urls] }), resourcesUrl, log (console).
+ * download), fetchTimeoutMs (20 s per file), fetchRetryMs (1 s, pause before
+ * the 2nd try of a file, doubled before the 3rd), lists ({ 'ads-tracking':
+ * [urls], full: [urls] }), resourcesUrl, log (console).
  */
 function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
   if (!cacheDir) throw new Error('createAdblock: cacheDir is required');
@@ -228,6 +257,7 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     retryMaxMs: HOUR,
     initTimeoutMs: 5000,
     fetchTimeoutMs: 20000,
+    fetchRetryMs: 1000,
     lists: LISTS,
     resourcesUrl: RESOURCES_URL,
     log: console,
@@ -287,6 +317,9 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     for (const t of tabs.values()) t.active = isActiveFor(t.top);
     if (st.enabled !== wasEnabled) {
       for (const ses of sessions.keys()) (st.enabled ? hook : unhook)(ses);
+      // Off: no list downloads either (this clears the timer). On: the
+      // refresh schedule comes back, also when the engine is still loaded.
+      if (st.initPromise) scheduleUpdate();
     }
     if (st.initPromise && st.enabled && (st.enabled !== wasEnabled || variantWanted() !== wasVariant)) {
       ensureEngine().catch(() => {});
@@ -320,6 +353,10 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
       const file = cacheFile(variant);
       const [buf, stat] = await Promise.all([fsp.readFile(file), fsp.stat(file)]);
       const engine = FiltersEngine.deserialize(buf); // throws on version/CRC mismatch
+      // A file cut short a few bytes after the version deserializes without
+      // an error into an empty engine whose config says "no CRC". Ours are
+      // always written with the CRC on, so that is a damaged file.
+      if (engine.config.integrityCheck !== true) throw new Error('damaged engine cache');
       engine.updateEnv(makeEnv());
       if (variant !== variantWanted()) return false;
       install(engine, variant, stat.mtimeMs, 'cache', buf.length);
@@ -330,7 +367,7 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
   }
 
   async function buildBytes(variant) {
-    const job = { urls: o.lists[variant], resourcesUrl: o.resourcesUrl, timeoutMs: o.fetchTimeoutMs };
+    const job = { urls: o.lists[variant], resourcesUrl: o.resourcesUrl, timeoutMs: o.fetchTimeoutMs, retryPauseMs: o.fetchRetryMs };
     if (o.useWorker) {
       try {
         return await buildInWorker(job);
@@ -342,9 +379,15 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     return buildEngineBytes({ ...job, fetchImpl: o.fetch });
   }
 
-  /** Download and parse the lists for `variant`, cache and load the result. */
+  /** Download and parse the lists for `variant`, cache and load the result.
+   *  One build at a time: the same variant joins the running build, another
+   *  one (adblock.cookieBanners switched mid-build) waits for it, and is
+   *  dropped if the switch was undone meanwhile. */
   function refresh(variant = variantWanted()) {
-    if (st.building && st.building.variant === variant) return st.building.promise;
+    if (st.building) {
+      if (st.building.variant === variant) return st.building.promise;
+      return st.building.promise.then(() => (!st.closed && variant === variantWanted() ? refresh(variant) : false));
+    }
     clearTimeout(st.timer);
     st.timer = null;
     const promise = (async () => {
@@ -464,7 +507,7 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     if (engine === null) return PASS;
     const type = details.resourceType;
     const tab = tabFor(details);
-    if (type === 'mainFrame') return PASS; // documents are never blocked
+    if (type === 'mainFrame') return decidePage(engine, details);
     if (tab !== null && !tab.active) return PASS;
     // The document that made the request (uBO's context); a frame with an
     // opaque origin falls back to the tab's top-level URL.
@@ -479,6 +522,32 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     }));
     if (redirect) return { redirectURL: surrogatePrefix + encodeURIComponent(redirect.filename) };
     return match ? CANCEL : PASS;
+  }
+
+  /** A page (top-level document) is cancelled only by a filter that names
+   *  documents ($document / $doc: uBO's badware and phishing lists); plain
+   *  filters such as ||ads.example^ hide a site's resources, never the site,
+   *  and neither do negated ones such as /ads/$~xhr (the engine cannot tell
+   *  `$all` from no option, so `$all` does not block pages either). A page is
+   *  never redirected to a surrogate. Its own site, not the page it
+   *  replaces, decides the allowlist. */
+  function decidePage(engine, details) {
+    const url = details.url;
+    if (!isActiveFor(url)) return PASS;
+    const request = Request.fromRawDetails({ url, sourceUrl: url, type: 'mainFrame', tabId: details.webContentsId || 0 });
+    // Not engine.match(): it stops at the first filter, and a hosts-style
+    // ||site^ listed earlier hides the site's $document filter.
+    let named = null;
+    let excepted = false;
+    for (const f of engine.matchAll(request)) {
+      if (f.isCSP()) continue;
+      if (f.isException()) {
+        if (!f.isGenericHide() && !f.isSpecificHide()) excepted = true; // not $elemhide & co.
+      } else if (namesDocuments(f) && (named === null || f.isImportant())) {
+        named = f;
+      }
+    }
+    return named !== null && (!excepted || named.isImportant()) ? CANCEL : PASS;
   }
 
   function serveSurrogate(request) {

@@ -243,6 +243,10 @@ adblock.setSiteEnabled(host, bool)    // updates settings 'adblock.allowlist'
 adblock.blockedCount(webContentsId)   // requests blocked for the current page
 adblock.on('blocked', ({ webContentsId, url }) => {})
 adblock.scheduleUpdate()              // single-shot timer, lists refreshed once a day
+adblock.update()                      // refresh the lists now (settings page); joins a running build
+adblock.detach(session)               // stop blocking on a session
+adblock.stats()                       // { ready, enabled, variant, source, builtAt, nextUpdateAt, ... }
+adblock.close()                       // clear timers, detach every session (quit, tests)
 ```
 
 Built on `@ghostery/adblocker-electron` (network blocking via
@@ -252,6 +256,15 @@ blocker must be the only user of `session.webRequest.onBeforeRequest` and
 everything in a tab whose top-level page is on that site. YouTube's video ads
 must be blocked (scriptlets), and blocking must not break YouTube playback,
 Google sign-in, Netflix, Spotify, Zoom or Patchbay.
+
+A top-level page is only blocked by a filter that names documents (`$document`,
+`$doc`: uBO's badware list), never by a plain `||site^` or a negated type
+(`$~xhr`), and never redirected. With `adblock.enabled` off, sessions are
+unhooked and no lists are downloaded. A damaged cache is rebuilt from the
+lists; with no cache and no network the browser starts without blocking and
+retries with a doubling backoff (2 min up to 1 h). One list build runs at a
+time. Behaviour: `test/adblock.test.js`; cost: `bench/adblock-cost.mjs`
+(~11 ms engine load, ~8 us p50 / ~50 us p99 per request).
 
 ### Media policy
 
