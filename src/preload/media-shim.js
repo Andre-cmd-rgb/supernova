@@ -166,6 +166,7 @@ function applyMediaShim(config) {
   const OFFSET = 0x40000000;
   let nextId = 0;
   let queue = new Map();
+  let running = null; // the batch being run, so a callback can cancel a later one
   let scheduled = false; // a timer or a real frame is pending
   let timer = 0;
   let last = -Infinity; // timestamp of the last batch
@@ -175,7 +176,10 @@ function applyMediaShim(config) {
     last = ts;
     const batch = queue;
     queue = new Map();
-    for (const cb of batch.values()) {
+    running = batch;
+    for (const [id, cb] of batch) {
+      if (!batch.has(id)) continue; // cancelled by an earlier callback of this batch
+      batch.delete(id);
       try {
         cb(ts);
       } catch (err) {
@@ -183,6 +187,7 @@ function applyMediaShim(config) {
         else Reflect_.apply(setT, g, [() => { throw err; }, 0]);
       }
     }
+    running = null;
   }
 
   function requestFrame() {
@@ -221,7 +226,7 @@ function applyMediaShim(config) {
   };
   const cafTrap = () => (target, thisArg, args) => {
     const id = Number(args[0]);
-    if (id > OFFSET && queue.delete(id)) return undefined;
+    if (id > OFFSET && (queue.delete(id) || (running !== null && running.delete(id)))) return undefined;
     return Reflect_.apply(target, thisArg, args);
   };
   wrap(g, 'requestAnimationFrame', rafTrap);

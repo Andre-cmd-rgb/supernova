@@ -12,7 +12,7 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFile, execFileSync } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const { normalizeOrigin } = require('../passwords');
 
@@ -33,17 +33,19 @@ const EPOCH_DELTA_MS = 11644473600000; // 1601-01-01 -> 1970-01-01
 
 let sqliteBin = null;
 function sqlite3Path() {
-  if (!sqliteBin) sqliteBin = fs.existsSync('/usr/bin/sqlite3') ? '/usr/bin/sqlite3' : 'sqlite3';
+  if (!sqliteBin) sqliteBin = fs.existsSync('/usr/bin/sqlite3') ? '/usr/bin/sqlite3' : 'sqlite3'; // sync-ok: once
   return sqliteBin;
 }
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-// ---------- detection (synchronous, small reads only) ----------
+// ---------- detection (small reads, all async: it runs on the main thread) ----------
 
-function readJsonSync(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+async function readJson(file) {
+  try { return JSON.parse(await fs.promises.readFile(file, 'utf8')); } catch { return null; }
 }
+
+const exists = (file) => fs.promises.access(file).then(() => true, () => false);
 
 function profileSort(a, b) {
   const n = (s) => (s === 'Default' ? -1 : Number(s.slice(8)));
@@ -62,46 +64,53 @@ function countBookmarkNodes(json) {
   return n;
 }
 
-function countPasswordsSync(dir) {
+function sqliteCount(file) {
+  // Read-only and lock-free on the live file: good enough for a count.
+  const uri = pathToFileURL(file).href + '?immutable=1';
+  return new Promise((resolve) => {
+    execFile(sqlite3Path(), ['-init', '/dev/null', '-readonly', uri,
+      'SELECT count(*) FROM logins WHERE blacklisted_by_user = 0 AND length(password_value) > 0;'],
+    { encoding: 'utf8', timeout: 3000 }, (err, out) => {
+      const n = parseInt(out, 10);
+      resolve(!err && Number.isFinite(n) ? n : null);
+    });
+  });
+}
+
+async function countPasswords(dir) {
   let total = null;
   for (const name of ['Login Data', 'Login Data For Account']) {
     const file = path.join(dir, name);
-    if (!fs.existsSync(file)) continue;
-    try {
-      // Read-only and lock-free on the live file: good enough for a count.
-      const uri = pathToFileURL(file).href + '?immutable=1';
-      const out = execFileSync(sqlite3Path(), ['-init', '/dev/null', '-readonly', uri,
-        'SELECT count(*) FROM logins WHERE blacklisted_by_user = 0 AND length(password_value) > 0;'],
-      { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
-      const n = parseInt(out, 10);
-      if (Number.isFinite(n)) total = (total || 0) + n;
-    } catch { /* unknown */ }
+    if (!(await exists(file))) continue;
+    const n = await sqliteCount(file);
+    if (n !== null) total = (total || 0) + n;
   }
   return total;
 }
 
-// -> [{ browser, name, dir, passwords: n|null, bookmarks: n|null }]
+// -> Promise<[{ browser, name, dir, passwords: n|null, bookmarks: n|null }]>
 // Options are for tests only (default: $XDG_CONFIG_HOME or ~/.config).
-function detectProfiles({ configDir } = {}) {
+async function detectProfiles({ configDir } = {}) {
   const base = configDir || process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
   const out = [];
   for (const b of BROWSERS) {
     const root = path.join(base, b.sub);
     let names;
-    try { names = fs.readdirSync(root); } catch { continue; }
-    const localState = readJsonSync(path.join(root, 'Local State'));
+    try { names = await fs.promises.readdir(root); } catch { continue; }
+    const localState = await readJson(path.join(root, 'Local State'));
     const info = (localState && localState.profile && localState.profile.info_cache) || {};
     for (const d of names.filter((n) => n === 'Default' || /^Profile \d+$/.test(n)).sort(profileSort)) {
       const dir = path.join(root, d);
-      const hasData = ['Login Data', 'Bookmarks', 'History', 'Preferences'].some((f) => fs.existsSync(path.join(dir, f)));
+      let hasData = false;
+      for (const f of ['Login Data', 'Bookmarks', 'History', 'Preferences']) if (await exists(path.join(dir, f))) { hasData = true; break; }
       if (!hasData) continue;
-      const bm = readJsonSync(path.join(dir, 'Bookmarks'));
+      const bm = await readJson(path.join(dir, 'Bookmarks'));
       const display = info[d] && typeof info[d].name === 'string' && info[d].name.trim() ? info[d].name.trim() : d;
       out.push({
         browser: b.browser,
         name: display,
         dir,
-        passwords: countPasswordsSync(dir),
+        passwords: await countPasswords(dir),
         bookmarks: bm ? countBookmarkNodes(bm) : null,
       });
     }
@@ -145,7 +154,7 @@ async function copyDb(src, tmp, name) {
 // ---------- crypto ----------
 
 function deriveKey(password) {
-  return crypto.pbkdf2Sync(Buffer.from(password, 'utf8'), 'saltysalt', 1, 16, 'sha1');
+  return crypto.pbkdf2Sync(Buffer.from(password, 'utf8'), 'saltysalt', 1, 16, 'sha1'); // sync-ok: one iteration, microseconds
 }
 
 function aesDecrypt(key, body) {
@@ -338,7 +347,7 @@ async function importCookies(dir, tmp, keys, cookies, result) {
   const stats = { added: 0, skipped: 0, failed: 0 };
   result.cookies = stats;
   let src = path.join(dir, 'Network', 'Cookies');
-  if (!fs.existsSync(src)) src = path.join(dir, 'Cookies');
+  if (!(await exists(src))) src = path.join(dir, 'Cookies');
   const db = await copyDb(src, tmp, 'cookies.db');
   if (!db) { result.errors.push('Cookies: this profile has no Cookies file.'); return; }
 
@@ -417,7 +426,7 @@ async function importProfile(profile, opts = {}) {
   const want = (k) => (what ? !!what[k] : true);
   const result = { passwords: null, bookmarks: null, history: null, cookies: null, errors: [] };
   const dir = profile && profile.dir;
-  if (!dir || !fs.existsSync(dir)) {
+  if (!dir || !(await exists(dir))) {
     result.errors.push('The profile folder was not found.');
     return result;
   }

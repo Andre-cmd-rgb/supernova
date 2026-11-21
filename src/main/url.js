@@ -101,4 +101,23 @@ function originOf(url) {
   }
 }
 
-module.exports = { fixup, fixupNav, searchUrl, displayHost, searchQueryOf, originOf };
+const schemeOf = (url) => {
+  const m = /^([a-z][a-z0-9+.-]*):/i.exec(String(url || '').trim());
+  return m ? m[1].toLowerCase() : '';
+};
+
+/**
+ * Whether a page at `from` may make the browser open `to`: a link it follows,
+ * a frame it loads, a window it opens, an entry of its context menu. Internal
+ * pages (their API) and local files open only from their own kind, so a web
+ * page can reach neither; javascript: URLs are never opened for a page.
+ * What the user types in the command bar does not go through here.
+ */
+function mayOpen(from, to) {
+  const target = schemeOf(to);
+  if (target === 'javascript') return false;
+  if (target === 'supernova' || target === 'file') return schemeOf(from) === target;
+  return true;
+}
+
+module.exports = { fixup, fixupNav, searchUrl, displayHost, searchQueryOf, originOf, mayOpen };

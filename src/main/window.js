@@ -6,7 +6,7 @@
 const { BaseWindow, WebContentsView, Menu, clipboard, shell } = require('electron');
 const { EventEmitter } = require('events');
 const { Tab } = require('./tab');
-const { fixupNav, displayHost, searchUrl } = require('./url');
+const { fixupNav, displayHost, searchUrl, mayOpen } = require('./url');
 
 const SIDEBAR_W = 240;
 const TOPBAR_H = 40;
@@ -56,6 +56,9 @@ class SnWindow extends EventEmitter {
       spellcheck: false,
       // The UI only repaints when state changes; nothing animates in it.
       backgroundThrottling: true,
+      // A private window's UI loads its tabs' favicons: in the private
+      // session, so they leave nothing in the persistent cache or cookies.
+      session: this.session,
     };
     this._uiPrefs = uiPrefs;
     this.ui = new WebContentsView({ webPreferences: uiPrefs });
@@ -166,7 +169,8 @@ class SnWindow extends EventEmitter {
     }
     if (!this.overlay) this.focusPage();
     this._updateTitle();
-    this.prompts = this.prompts.filter((p) => p.tabId !== prev?.id || p.persistent);
+    // Other tabs' prompts stay pending (a permission request waits for its
+    // answer); the UI only ever shows the active tab's (_visiblePrompts).
     this.pushState();
     this.emit('session-changed');
   }
@@ -324,7 +328,13 @@ class SnWindow extends EventEmitter {
   }
 
   _floatWanted() {
-    return !!(this.prompts.length || this.findOpen || this.ctx.downloads.toasts(this).length);
+    return !!(this._visiblePrompts().length || this.findOpen || this.ctx.downloads.toasts(this).length);
+  }
+
+  /** Window-wide prompts and the active tab's. */
+  _visiblePrompts() {
+    const id = this.active && this.active.id;
+    return this.prompts.filter((p) => !p.tabId || p.tabId === id);
   }
 
   _layoutFloat() {
@@ -494,6 +504,10 @@ class SnWindow extends EventEmitter {
     wc.on('before-input-event', (e, input) => { if (ctx.shortcuts.handle(this, input, tab)) e.preventDefault(); });
     wc.on('context-menu', (_e, params) => this._contextMenu(tab, params));
     wc.setWindowOpenHandler((details) => this._windowOpen(tab, details));
+    // What a page starts itself, in any frame: never supernova:// or file://
+    // from the web (url.js mayOpen). A redirect there is never legitimate.
+    wc.on('will-frame-navigate', (e) => { if (!mayOpen(wc.getURL(), e.url)) e.preventDefault(); });
+    wc.on('will-redirect', (e) => { if (!mayOpen('', e.url)) e.preventDefault(); });
     wc.on('enter-html-full-screen', () => this.setHtmlFullscreen(true));
     wc.on('leave-html-full-screen', () => this.setHtmlFullscreen(false));
     wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
@@ -530,6 +544,7 @@ class SnWindow extends EventEmitter {
     // Links to other apps (mailto:, zoommtg:, spotify:) go through the
     // openExternal permission instead.
     if (!/^(https?|about|blob|data|file):/i.test(url) && url !== '') return { action: 'deny' };
+    if (!mayOpen(opener.webContents ? opener.webContents.getURL() : opener.url, url)) return { action: 'deny' };
     const background = disposition === 'background-tab';
     return {
       action: 'allow',
@@ -551,21 +566,23 @@ class SnWindow extends EventEmitter {
       items.push({ label: 'Add to dictionary', click: () => wc.session.addWordToSpellCheckerDictionary(p.misspelledWord) });
       sep();
     }
-    if (p.linkURL) {
+    // A page's links open only where the page itself could go (url.js mayOpen).
+    const from = wc.getURL();
+    if (p.linkURL && mayOpen(from, p.linkURL)) {
       items.push({ label: 'Open link in new tab', click: () => this.newTab({ url: p.linkURL, background: true, opener: tab }) });
       if (!this.private) items.push({ label: 'Open link in private window', click: () => this.ctx.newWindow({ private: true, url: p.linkURL }) });
       items.push({ label: 'Copy link address', click: () => clipboard.writeText(p.linkURL) });
       items.push({ label: 'Save link as…', click: () => wc.downloadURL(p.linkURL) });
       sep();
     }
-    if (p.mediaType === 'image' && p.srcURL) {
+    if (p.mediaType === 'image' && p.srcURL && mayOpen(from, p.srcURL)) {
       items.push({ label: 'Open image in new tab', click: () => this.newTab({ url: p.srcURL, background: true, opener: tab }) });
       items.push({ label: 'Copy image', click: () => wc.copyImageAt(p.x, p.y) });
       items.push({ label: 'Copy image address', click: () => clipboard.writeText(p.srcURL) });
       items.push({ label: 'Save image as…', click: () => wc.downloadURL(p.srcURL) });
       sep();
     }
-    if ((p.mediaType === 'video' || p.mediaType === 'audio') && p.srcURL && !p.srcURL.startsWith('blob:')) {
+    if ((p.mediaType === 'video' || p.mediaType === 'audio') && p.srcURL && !p.srcURL.startsWith('blob:') && mayOpen(from, p.srcURL)) {
       items.push({ label: `Save ${p.mediaType} as…`, click: () => wc.downloadURL(p.srcURL) });
       sep();
     }
@@ -626,7 +643,7 @@ class SnWindow extends EventEmitter {
       },
       overlay: this.overlay,
       find: this.findOpen ? (tab && tab.find) || { text: '', active: 0, matches: 0 } : null,
-      prompts: this.prompts.filter((p) => !p.tabId || p.tabId === (tab && tab.id)).map((p) => p.public),
+      prompts: this._visiblePrompts().map((p) => p.public),
       downloads: this.ctx.downloads.list(),
       toasts: this.ctx.downloads.toasts(this),
       fullscreen: this.htmlFullscreen || this.immersive,

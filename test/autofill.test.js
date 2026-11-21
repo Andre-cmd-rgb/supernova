@@ -244,12 +244,16 @@ function electronMain(cfg) {
     const pages = { ...cfg.pages };
     const [pa, pb, pc] = await Promise.all([serve(pages), serve(pages), serve(pages)]);
     const A = `http://127.0.0.1:${pa}`, B = `http://127.0.0.1:${pb}`, C = `http://127.0.0.1:${pc}`;
+    // A plain-http page on another machine (not a secure context, unlike
+    // 127.0.0.1): --host-resolver-rules maps the name to this server.
+    const D = `http://insecure.test:${pa}`;
     pages.C = C;
     const table = {
       [A]: [{ id: 'a1', origin: A, username: 'alice', password: 'pw-alice' }],
       [B]: [{ id: 'b1', origin: B, username: 'first@example.com', password: 'pw-first' },
         { id: 'b2', origin: B, username: 'second@example.com', password: 'pw-second' }],
       [C]: [{ id: 'c1', origin: C, username: 'carol', password: 'pw-carol' }],
+      [D]: [{ id: 'd1', origin: D, username: 'dave', password: 'pw-dave' }],
     };
     const prompts = [];
     const saved = [];
@@ -267,7 +271,9 @@ function electronMain(cfg) {
 
     const win = new BrowserWindow({
       show: false, width: 1000, height: 800,
-      webPreferences: { preload: cfg.preload, sandbox: cfg.sandbox, contextIsolation: true, nodeIntegrationInSubFrames: true, backgroundThrottling: false },
+      // The shipped page preferences (src/main/tab.js), with the preload set
+      // directly instead of on the session, and no background throttling.
+      webPreferences: { ...require(cfg.tab).pagePreferences(undefined), preload: cfg.preload, sandbox: cfg.sandbox, backgroundThrottling: false },
     });
     const wc = win.webContents;
     // Trusted input through the DevTools protocol: a hidden headless window
@@ -380,6 +386,14 @@ function electronMain(cfg) {
     out.mixed = ['#lu', '#lp', '#nu', '#np1', '#np2'];
     for (let i = 0; i < out.mixed.length; i++) out.mixed[i] = await val(out.mixed[i]);
 
+    step('9. Insecure');
+    await load(D + '/github', 1200);
+    out.insecure = { secure: await js('isSecureContext'), user: await val('#login_field'), pass: await val('#password') };
+    await click(await center('#login_field'));
+    out.insecure.chooser = await chooserOpen();
+    await key('Down'); await key('Enter');
+    out.insecure.afterPick = [await val('#login_field'), await val('#password')];
+
     out.sandbox = cfg.sandbox;
     process.stdout.write('RESULT ' + JSON.stringify(out) + '\n');
     app.exit(0);
@@ -406,14 +420,14 @@ function runElectron() {
       fs.copyFileSync(entry, preload);
       sandbox = false;
     }
-    const cfg = { pages: PAGES, preload, sandbox, autofillIpc: path.join(ROOT, 'src/main/autofill-ipc.js') };
+    const cfg = { pages: PAGES, preload, sandbox, autofillIpc: path.join(ROOT, 'src/main/autofill-ipc.js'), tab: path.join(ROOT, 'src/main/tab.js') };
     fs.writeFileSync(path.join(dir, 'main.js'), `(${electronMain.toString()})(${JSON.stringify(cfg)});\n`);
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;
     // No --no-zygote: without the zygote every renderer starts from scratch and
     // runs Electron's root check without the browser's --no-sandbox, so as root
     // (the CI container) the sandboxed preload's renderer dies at about:blank.
-    const child = spawn(ELECTRON, ['--no-sandbox', '--ozone-platform=headless', '--disable-gpu',
+    const child = spawn(ELECTRON, ['--no-sandbox', '--ozone-platform=headless', '--disable-gpu', '--host-resolver-rules=MAP insecure.test 127.0.0.1',
       `--user-data-dir=${path.join(dir, 'profile')}`, path.join(dir, 'main.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     const debug = !!process.env.SN_AUTOFILL_E2E_DEBUG; // pipe Electron's output through
@@ -483,6 +497,13 @@ test('page side in a real (headless) Electron', { skip: canRunElectron ? false :
     assert.equal(r.mixed[0], 'alice');
     assert.ok(r.mixed[1] === 'pw-alice');
     assert.deepEqual(r.mixed.slice(2), ['', '', '']);
+  });
+  await t.test('plain http on another machine: never filled by itself, offered on click', () => {
+    assert.equal(r.insecure.secure, false);
+    assert.deepEqual([r.insecure.user, r.insecure.pass], ['', '']);
+    assert.equal(r.insecure.chooser, true);
+    assert.equal(r.insecure.afterPick[0], 'dave');
+    assert.ok(r.insecure.afterPick[1] === 'pw-dave');
   });
   await t.test('cross-origin iframe: not auto-filled, gets its own origin on demand', () => {
     assert.equal(r.frame.top[0], 'alice');

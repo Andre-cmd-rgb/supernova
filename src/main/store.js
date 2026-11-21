@@ -35,11 +35,11 @@ class JsonStore extends EventEmitter {
     this._timer = null;
     this._writing = null;
     try {
-      this.data = JSON.parse(fs.readFileSync(file, 'utf8')) || {};
+      this.data = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; // sync-ok: startup
     } catch (err) {
       if (err.code !== 'ENOENT') {
         // A broken file is kept aside rather than silently lost.
-        try { fs.renameSync(file, `${file}.broken-${Date.now()}`); } catch {}
+        try { fs.renameSync(file, `${file}.broken-${Date.now()}`); } catch {} // sync-ok: startup
       }
       this.data = {};
     }
@@ -103,9 +103,9 @@ class JsonStore extends EventEmitter {
     clearTimeout(this._timer);
     this._timer = null;
     const tmp = `${this.file}.tmp`;
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 1));
-    fs.renameSync(tmp, this.file);
+    fs.mkdirSync(path.dirname(this.file), { recursive: true }); // sync-ok: at quit
+    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 1)); // sync-ok: at quit
+    fs.renameSync(tmp, this.file); // sync-ok: at quit
   }
 }
 

@@ -151,9 +151,9 @@ function assertNoSecrets(value) {
   for (const secret of SECRETS) assert.ok(!s.includes(secret), 'a secret leaked into the result');
 }
 
-test('detectProfiles finds profiles with names and counts', opts, () => {
+test('detectProfiles finds profiles with names and counts', opts, async () => {
   const { config, profileDir } = buildFixture();
-  const found = detectProfiles({ configDir: config });
+  const found = await detectProfiles({ configDir: config });
   assert.deepEqual(found.map((p) => [p.browser, p.name, path.basename(p.dir)]), [
     ['chrome', 'Personal', 'Default'],
     ['chrome', 'Work', 'Profile 1'],
@@ -165,12 +165,12 @@ test('detectProfiles finds profiles with names and counts', opts, () => {
   assert.equal(found[1].passwords, null);
   assert.equal(found[1].bookmarks, null);
   assert.equal(found[2].bookmarks, 4);
-  assert.deepEqual(detectProfiles({ configDir: path.join(config, 'nothing-here') }), []);
+  assert.deepEqual(await detectProfiles({ configDir: path.join(config, 'nothing-here') }), []);
 });
 
 test('importProfile imports everything and maps cookies for Electron', opts, async () => {
   const { config } = buildFixture();
-  const [profile] = detectProfiles({ configDir: config });
+  const [profile] = await detectProfiles({ configDir: config });
   const s = stores();
   const cookies = fakeCookies();
   const lookups = [];
@@ -237,7 +237,7 @@ test('importProfile imports everything and maps cookies for Electron', opts, asy
 
 test('missing keyring key: v10 still works, v11 counted as failed', opts, async () => {
   const { config } = buildFixture();
-  const [profile] = detectProfiles({ configDir: config });
+  const [profile] = await detectProfiles({ configDir: config });
   const s = stores();
   const cookies = fakeCookies();
   const result = await importProfile(profile, { ...s, cookies: cookies.api, secretLookup: async () => null });
@@ -250,7 +250,7 @@ test('missing keyring key: v10 still works, v11 counted as failed', opts, async 
 
 test('what selects parts; an unavailable vault does not stop the rest', opts, async () => {
   const { config } = buildFixture();
-  const [profile] = detectProfiles({ configDir: config });
+  const [profile] = await detectProfiles({ configDir: config });
   const s = stores();
   const only = await importProfile(profile, { what: { bookmarks: true }, ...s, cookies: null, secretLookup: async () => KEYRING_PASS });
   assert.equal(only.passwords, null);

@@ -21,7 +21,9 @@ Version 1.0.0-beta.1.
   or a Google Password Manager CSV. Chrome is not needed afterwards.
 - **Passwords saved and filled in**, encrypted with a key kept in the login
   keyring. With no keyring it refuses to store them, rather than use a fixed
-  key.
+  key. On secure pages a single saved login is filled in by itself. On plain
+  http to another machine, and in another site's frames, it is offered when
+  you click the field.
 - **Out of the way.** Tabs in a sidebar or along the top, a command bar
   (Ctrl+K) for addresses, Google search, open tabs, bookmarks and history.
   There is no toolbar, start page, account or telemetry. On Nova it takes the
@@ -60,8 +62,9 @@ npm test       # unit tests, in a clean environment (tools/test.sh)
 ## Measured
 
 YouTube, AV1 1080p60, against Chrome on a ThinkPad P1 Gen 4i (Intel Xe iGPU,
-3840x2400 at scale 1.6, Hyprland). Medians of three alternating runs; method,
-caveats and raw numbers are in [`bench/README.md`](bench/README.md).
+3840x2400 at scale 1.6, Hyprland). Medians of three alternating runs (two for
+Supernova fullscreen, where one run did not play); method, caveats and raw
+numbers are in [`bench/README.md`](bench/README.md).
 
 | | GPU power | CPU | memory (PSS) |
 |---|---|---|---|

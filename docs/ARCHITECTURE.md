@@ -24,13 +24,22 @@ Measurements of the finished browser against Chrome on real YouTube are in
   animations. Timers are single-shot and scheduled for when they are due.
 - The main process thread stays light: every request passes through it for ad
   blocking, so no synchronous disk I/O after startup (use `fs.promises`), no
-  heavy loops.
+  heavy loops. A blocking call that cannot be avoided (Electron needs a
+  download's save path, or a "leave site?" answer, before its event returns)
+  carries a `// sync-ok: <reason>` comment; `test/source-rules.test.js` fails
+  on any `*Sync(` call in `src/main` without one.
 - Pure logic lives in modules that do not `require('electron')` at the top, so
   `npm test` can test them with plain Node. Electron objects are passed in
-  (dependency injection). `npm test` is `tools/test.sh`: every
-  `test/*.test.js` under `env -i`, with a throwaway HOME and XDG dirs and a
-  D-Bus address that leads nowhere, so no test can read or write the user's
-  profile, keyring or session bus.
+  (dependency injection); only `main.js`, `window.js` and `tab.js` load
+  Electron at the top (`test/source-rules.test.js` holds this). `npm test` is
+  `tools/test.sh`: every `test/*.test.js` under `env -i`, with a throwaway
+  HOME, XDG dirs and TMPDIR and a D-Bus address that leads nowhere, so no test
+  can read or write the user's profile, keyring or session bus, and nothing a
+  test leaves behind outlives the run.
+- Web content is untrusted, and so is everything a page's renderer sends. A
+  page never reaches `supernova://` or `file://` (see "Internal pages"), IPC
+  from the browser UI is accepted only from a window's own UI and float views,
+  and handlers take origins from `event.senderFrame`, never from a payload.
 - Data lives in `app.getPath('userData')` (`~/.config/supernova`). Writes are
   atomic (write `file.tmp`, then rename).
 
@@ -40,6 +49,7 @@ Measurements of the finished browser against Chrome on real YouTube are in
 src/main/main.js            entry: switches, single instance, services, first window
 src/main/flags.js           Chromium switches (Wayland, VA-API, GPU pinning, memory)
 src/main/store.js           JsonStore: settings and small JSON files, atomic + debounced
+src/main/settings-schema.js the settings' defaults, and what the settings page may write
 src/main/window.js          SnWindow: one BaseWindow, the UI view and the tab views
 src/main/tab.js             Tab: lazy view, freeze/discard, events
 src/main/ipc.js             IPC between the UI view and the main process
@@ -89,15 +99,22 @@ Preloads run sandboxed, so they cannot `require` local files at run time:
 
 ```js
 const services = {
-  settings,   // JsonStore('settings.json')
+  settings,   // JsonStore('settings.json', DEFAULTS from settings-schema.js)
   history,    // createHistory({ dir })
   bookmarks,  // createBookmarks({ dir })
   vault,      // createVault({ dir, safeStorage })
   adblock,    // createAdblock({ cacheDir, settings })
   media,      // createMediaPolicy({ settings, power })
-  power,      // { onBattery(): bool, on('change', fn) }  (wraps electron.powerMonitor)
+  downloads,  // createDownloads(...)
 };
 ```
+
+`power` (`src/main/power.js`: `{ onBattery(), on('change', fn) }`, wrapping
+`electron.powerMonitor`) is on the shared `ctx`, next to the services.
+
+At quit, the browser waits (at most 3 s) for history, bookmarks and the vault
+to finish writing before it exits; the session and settings are written
+synchronously first.
 
 ### JsonStore (`src/main/store.js`, core)
 
@@ -109,7 +126,11 @@ store.on('change', (key, value) => {})  // EventEmitter
 await store.flush()
 ```
 
-Settings keys (defaults):
+Settings keys (defaults, in `src/main/settings-schema.js`). The settings page
+may write only the keys it has a control for, with the values it offers
+(`WRITABLE` there; a test ties it to `settings.html`): never `downloads.dir`,
+`permissions`, `zoom.perHost` or `passwords.never`, which the browser writes
+itself.
 
 | key | default | meaning |
 |---|---|---|
@@ -194,18 +215,27 @@ upgrade of the same host). The whole vault is one JSON blob encrypted with
 ### Autofill
 
 - `src/preload/autofill.js` exports `installAutofill({ ipcRenderer })`. It runs
-  in the page's isolated world (preload), in every frame. It finds login forms
+  in the page's isolated world (preload), in every frame (tabs set
+  `nodeIntegrationInSubFrames`, which adds the preload to subframes, still
+  sandboxed). It finds login forms
   (a visible password field plus the nearest username/email field), asks
   `ipcRenderer.invoke('sn:pw:query', { origin, frameUrl })` for candidates and
   fills when there is exactly one (on load, and again for fields that appear
   later); with several it fills the first and offers the rest on focus (a tiny
-  in-page dropdown in a closed shadow root). On submit (form submit, or a click
+  in-page dropdown in a closed shadow root). It fills by itself only in a
+  secure context (https, or http to this machine) and in frames of the top
+  page's own origin; elsewhere (plain http to another machine, a cross-origin
+  iframe) it offers the saved logins when the user focuses the field. A
+  username typed on one step of a two-step sign-in is reported with
+  `ipcRenderer.send('sn:pw:username', { username })`, so the password step can
+  be saved with it. On submit (form submit, or a click
   on the submit button / Enter in the password field followed by navigation)
   it sends `ipcRenderer.send('sn:pw:submitted', { origin, username, password })`.
   It must never fill into cross-origin iframes with the top frame's passwords:
   the origin used is the frame's own.
 - `src/main/autofill-ipc.js` exports
   `registerAutofillIpc({ ipcMain, vault, settings, promptSave })` which handles
+  `sn:pw:username` (kept per tab and origin for ten minutes), and
   `sn:pw:query` (returns matches for the sender frame's real origin, taken from
   `event.senderFrame.origin`, never from the payload) and `sn:pw:submitted`
   (skips private sessions: `event.sender.session.isPersistent() === false`;
@@ -218,8 +248,8 @@ upgrade of the same host). The whole vault is one JSON blob encrypted with
 
 ```js
 const { detectProfiles, importProfile } = require('./import/chrome');
-detectProfiles()   // -> [{ browser: 'chrome'|'chromium'|'brave'|'vivaldi'|'edge',
-                   //       name, dir, passwords: n|null, bookmarks: n|null }]
+await detectProfiles()  // -> [{ browser: 'chrome'|'chromium'|'brave'|'vivaldi'|'edge',
+                        //       name, dir, passwords: n|null, bookmarks: n|null }]
 await importProfile(profile, {
   what: { passwords: true, bookmarks: true, history: true, cookies: true },
   vault, bookmarks, history,
@@ -309,8 +339,8 @@ time. Behaviour: `test/adblock.test.js`; cost: `bench/adblock-cost.mjs`
     with the browser's vsync timestamp, so animations stay monotonic and on
     vsync. Throttled ids start at `0x40000000`, so cancelling works across a
     switch; with `rafFps` 0 calls go straight to the browser.
-  - Every wrapper is a `Proxy` of the original: same `name`, `length`,
-    `toString` and `this` handling, nothing new on `window`.
+  - Every wrapper is a `Proxy` of the original: same `name`, `length` and
+    `this` handling, a native-looking `toString`, nothing new on `window`.
 - The page preload calls it at document start:
   `const cfg = ipcRenderer.sendSync('sn:media:config')` then
   `contextBridge.executeInMainWorld({ func: applyMediaShim, args: [cfg] })`,
@@ -332,8 +362,26 @@ it exists only while something needs it: it is created on first use, hidden
 when nothing is shown, and closed after 30 s with nothing in it
 (`FLOAT_IDLE_MS`). Messages sent while it is starting are queued, and a focus
 request made while it is hidden (find opened with Ctrl+F) is applied when it
-is shown. Hidden tabs are frozen and later discarded on the timers in
-`tabs.freezeAfterMin` / `tabs.discardAfterMin`.
+is shown. Each tab's prompts stay pending while another tab is shown, and the
+UI shows only the active tab's. Hidden tabs are frozen and later discarded on
+the timers in `tabs.freezeAfterMin` / `tabs.discardAfterMin`; tabs that play
+or capture are left alone, and so is a tab the user typed into (the page
+preload reports the first trusted `input` event, `sn:edited`), until it
+navigates, because a discard would lose the text. A private window's UI uses
+the private session, so the favicons it shows leave nothing behind.
+
+### Internal pages (`src/main/protocol.js`)
+
+`supernova://settings` and `supernova://error` are served from `src/pages`;
+each host serves only its own page and files. `internalAllowed(url, name)`
+decides what `window.supernova.invoke()` may call, from the calling frame's
+own URL (top frame only): the settings page (path `/`) the whole API, the
+error page only `theme`. A web page cannot get there: `mayOpen(from, to)` in
+`url.js` refuses `supernova:` and `file:` targets unless the page is one
+itself, and `window.js` applies it to every navigation a page starts
+(`will-frame-navigate`), to redirects, `window.open` and the context menu.
+The error page retries only http(s) addresses. Smoke mode checks that a page
+cannot navigate itself there.
 
 ### Address input (`src/main/url.js`)
 
@@ -371,13 +419,17 @@ pings. `SUPERNOVA_EXTRA_FEATURES=A,B` appends features for experiments
 With `SUPERNOVA_SMOKE=1` the browser checks itself at startup: it opens the
 settings page, waits for the page preload's internal API (`info`) and the UI
 view's `window.sn`, prints `supernova: smoke ok {...}` and exits 0, or prints
-`supernova: smoke FAILED <why>` and exits 1. `tools/smoke.sh` runs it headless
+`supernova: smoke FAILED <why>` and exits 1. It also checks that a web page
+can neither navigate itself to `supernova://settings` nor open it with
+`window.open`. `tools/smoke.sh` runs it headless
 with a throwaway profile and an empty environment, in CI and in the PKGBUILD's
 `check()`.
 
 ## IPC between the UI view and the main process (core)
 
 `window.sn` (ui-preload) exposes:
-`sn.onState(fn)` (main pushes a whole state snapshot, debounced to one per
-frame), `sn.cmd(name, ...args)` (fire and forget), `sn.invoke(name, ...args)`
-(request/response, e.g. `suggest`).
+`sn.on(channel, fn)` for `sn:state` (main pushes a whole state snapshot, at
+most one per frame), `sn:palette`, `sn:find-open` and `sn:find-next`;
+`sn.cmd(name, ...args)` (fire and forget) and `sn.invoke(name, ...args)`
+(request/response, e.g. `suggest`). The main process accepts these only from
+a window's own UI and float views.

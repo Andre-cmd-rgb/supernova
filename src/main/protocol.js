@@ -7,10 +7,32 @@ const { pathToFileURL } = require('url');
 const PAGES = path.join(__dirname, '..', 'pages');
 const SHARED = path.join(__dirname, '..', 'ui');
 
+// Each host serves its own page and files, nothing else: the API a page gets
+// is decided by its host (internalAllowed), so supernova://settings/error.html
+// must not exist.
 const ROUTES = {
-  settings: 'settings.html',
-  error: 'error.html',
+  settings: { page: 'settings.html', files: ['settings.js', 'pages.css'] },
+  error: { page: 'error.html', files: ['error.js', 'pages.css'] },
 };
+
+// What each internal page may call through window.supernova.invoke().
+const API = {
+  settings: null, // all of it
+  error: new Set(['theme']),
+};
+
+/**
+ * Whether the page at `senderUrl` (the calling frame's URL, never something it
+ * sent) may call the internal API's `name`.
+ */
+function internalAllowed(senderUrl, name) {
+  let u;
+  try { u = new URL(senderUrl); } catch { return false; }
+  if (u.protocol !== 'supernova:' || !ROUTES[u.hostname] || !(u.pathname === '/' || u.pathname === '')) return false;
+  if (u.username || u.password || u.port) return false;
+  const allowed = API[u.hostname];
+  return allowed === null || allowed.has(name);
+}
 
 // Electron takes one registerSchemesAsPrivileged() call per run, so every
 // scheme of ours goes into it: supernova:// and the ad blocker's surrogate
@@ -28,15 +50,17 @@ function handlerFor(net) {
     const host = u.hostname;
     let rel = decodeURIComponent(u.pathname).replace(/^\/+/, '');
     let file;
+    const route = Object.prototype.hasOwnProperty.call(ROUTES, host) ? ROUTES[host] : null;
+    if (!route) return new Response('Not found', { status: 404 });
     if (!rel || rel === 'index.html') {
-      if (!ROUTES[host]) return new Response('Not found', { status: 404 });
-      file = path.join(PAGES, ROUTES[host]);
+      file = path.join(PAGES, route.page);
     } else if (rel.startsWith('shared/')) {
       file = path.join(SHARED, rel.slice(7));
       if (!file.startsWith(SHARED + path.sep)) return new Response('Not found', { status: 404 });
-    } else {
+    } else if (route.files.includes(rel)) {
       file = path.join(PAGES, rel);
-      if (!file.startsWith(PAGES + path.sep)) return new Response('Not found', { status: 404 });
+    } else {
+      return new Response('Not found', { status: 404 });
     }
     return net.fetch(pathToFileURL(file).href);
   };
@@ -46,4 +70,4 @@ function attach(session, net) {
   if (!session.protocol.isProtocolHandled('supernova')) session.protocol.handle('supernova', handlerFor(net));
 }
 
-module.exports = { registerScheme, attach };
+module.exports = { registerScheme, attach, handlerFor, internalAllowed };

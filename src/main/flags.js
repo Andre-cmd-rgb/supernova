@@ -8,16 +8,16 @@ const fs = require('fs');
 // card (which costs ~6 W on the P1 Gen 4i just by being awake).
 function integratedRenderNode() {
   try {
-    for (const name of fs.readdirSync('/sys/class/drm')) {
+    for (const name of fs.readdirSync('/sys/class/drm')) { // sync-ok: before the app is ready
       if (!/^renderD\d+$/.test(name)) continue;
-      const vendor = fs.readFileSync(`/sys/class/drm/${name}/device/vendor`, 'utf8').trim();
+      const vendor = fs.readFileSync(`/sys/class/drm/${name}/device/vendor`, 'utf8').trim(); // sync-ok: as above
       // Intel (0x8086) first: on a hybrid laptop that is the integrated GPU.
       if (vendor === '0x8086') return `/dev/dri/${name}`;
     }
     // Otherwise any GPU that is not NVIDIA's (an AMD APU, say).
-    for (const name of fs.readdirSync('/sys/class/drm')) {
+    for (const name of fs.readdirSync('/sys/class/drm')) { // sync-ok: before the app is ready
       if (!/^renderD\d+$/.test(name)) continue;
-      const vendor = fs.readFileSync(`/sys/class/drm/${name}/device/vendor`, 'utf8').trim();
+      const vendor = fs.readFileSync(`/sys/class/drm/${name}/device/vendor`, 'utf8').trim(); // sync-ok: as above
       if (vendor !== '0x10de') return `/dev/dri/${name}`;
     }
   } catch {}

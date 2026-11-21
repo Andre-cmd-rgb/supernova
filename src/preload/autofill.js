@@ -203,9 +203,12 @@ function installAutofill({ ipcRenderer } = {}) {
       .then(() => fillContexts());
   }
 
-  // Never auto-fill inside a frame embedded by another origin; there the
-  // chooser still opens when the user focuses the field.
+  // Never auto-fill inside a frame embedded by another origin, or on a page
+  // that is not a secure context (plain http to another machine, where anyone
+  // on the network can add a script that reads the field). There the chooser
+  // still opens when the user focuses the field.
   function autoFillAllowed() {
+    if (!window.isSecureContext) return false;
     if (window.top === window) return true;
     const anc = location.ancestorOrigins;
     if (anc && anc.length) {

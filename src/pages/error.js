@@ -29,7 +29,10 @@ document.getElementById('title').textContent = title;
 document.getElementById('url').textContent = url;
 document.getElementById('why').textContent = why;
 document.getElementById('code').textContent = `${desc || 'ERR'} (${code})`;
-document.getElementById('retry').addEventListener('click', () => { if (url) location.href = url; });
+// Only a web address is retried: the query string is anyone's to write.
+const retryable = /^https?:\/\//i.test(url);
+document.getElementById('retry').addEventListener('click', () => { if (retryable) location.href = url; });
+if (!retryable) document.getElementById('retry').hidden = true;
 if (code <= -200 && code > -300) document.getElementById('retry').hidden = true;
 
 (async () => {

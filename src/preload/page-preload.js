@@ -33,6 +33,14 @@ if (window === window.top) {
 
 if (web) {
   try { installAutofill({ ipcRenderer }); } catch {}
+  // The user typed into this page (any frame): the tab is then never
+  // discarded, which would lose the text. Told once per document.
+  const typed = (e) => {
+    if (!e.isTrusted) return;
+    window.removeEventListener('input', typed, true);
+    ipcRenderer.send('sn:edited');
+  };
+  window.addEventListener('input', typed, true);
 }
 
 // Internal pages (supernova://settings) get a small API; the main process

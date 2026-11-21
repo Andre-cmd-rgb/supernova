@@ -125,7 +125,9 @@ function createPermissions({ settings, findTab, desktopCapturer }) {
       const wc = request.frame && request.frame.top ? findWebContents(request.frame) : null;
       const origin = originOf(request.securityOrigin || (request.frame && request.frame.url) || '');
       try {
-        if (origin && decision(origin, 'display-capture', isPrivate) !== 'allow') {
+        // No origin (a sandboxed frame, an opaque one): nobody to ask about.
+        if (!origin) return callback({});
+        if (decision(origin, 'display-capture', isPrivate) !== 'allow') {
           const answer = wc ? await prompt(wc, origin, 'display-capture', {}, 'wants to see your screen') : 'deny';
           if (answer !== 'allow') return callback({});
           remember(origin, ['display-capture'], 'allow', isPrivate);
@@ -157,6 +159,8 @@ function createPermissions({ settings, findTab, desktopCapturer }) {
 
   return {
     attach,
+    /** The last private window closed: its decisions go with it. */
+    forgetPrivate() { sessionDecisions.clear(); },
     respond(id, action) {
       for (const p of pending) if (p.id === id) { p.resolve(action); return true; }
       return false;

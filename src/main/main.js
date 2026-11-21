@@ -50,27 +50,7 @@ if (!app.requestSingleInstanceLock({ argv })) {
   process.exit(0);
 }
 
-const DEFAULTS = {
-  'tabs.position': 'left',
-  'sidebar.visible': true,
-  'search.engine': 'google',
-  'search.suggestions': true,
-  'adblock.enabled': true,
-  'adblock.allowlist': [],
-  'adblock.cookieBanners': false,
-  'video.maxHeightOnBattery': 1080,
-  'video.maxHeightOnAC': 0,
-  'video.prefer30fpsOnBattery': false,
-  'animations.limitOnBattery': true,
-  'tabs.freezeAfterMin': { ac: 10, battery: 2 },
-  'tabs.discardAfterMin': { ac: 120, battery: 30 },
-  'passwords.offerToSave': true,
-  'passwords.never': [],
-  'import.chromeDone': false,
-  'zoom.perHost': {},
-  'downloads.dir': '',
-  permissions: {},
-};
+const { DEFAULTS, checkSetting } = require('./settings-schema');
 
 function optional(modPath, fallback) {
   try {
@@ -87,6 +67,7 @@ function urlsFrom(args, cwd) {
   for (const a of args) {
     if (!a || a.startsWith('-')) continue;
     if (/^[a-z][a-z0-9+.-]*:/i.test(a)) out.push(a);
+    // sync-ok: a stat per command-line argument, at start or a second launch
     else if (fs.existsSync(path.resolve(cwd || process.cwd(), a))) out.push('file://' + path.resolve(cwd || process.cwd(), a));
     else { const u = fixup(a); if (u) out.push(u); }
   }
@@ -135,6 +116,7 @@ const ctx = {
   wireTab(w, tab, wc) {
     // A page asking "leave this site?" (unsaved work): ask, as Chrome does.
     wc.on('will-prevent-unload', (e) => {
+      // sync-ok: Electron needs the answer before the event returns.
       const choice = dialog.showMessageBoxSync(w.base, {
         type: 'question', buttons: ['Leave', 'Stay'], defaultId: 1, cancelId: 1,
         title: 'Leave site?', message: 'Leave site?', detail: 'Changes you made may not be saved.',
@@ -229,7 +211,7 @@ function lifecyclePolicy() {
 
 function setupSession(ses) {
   attachProtocol(ses, net);
-  if (fs.existsSync(pagePreload)) {
+  if (fs.existsSync(pagePreload)) { // sync-ok: once per session
     ses.registerPreloadScript({ type: 'frame', id: 'supernova-page', filePath: pagePreload });
   } else {
     console.warn('supernova: dist/preload missing; run `npm run build`');
@@ -277,6 +259,7 @@ function newWindow(opts = {}) {
     if (w.private && ![...windows].some((x) => x.private) && privateSession) {
       const ses = privateSession;
       privateSession = null;
+      permissions.forgetPrivate();
       ses.clearStorageData().catch(() => {});
       ses.clearCache().catch(() => {});
     }
@@ -402,6 +385,7 @@ function secretLookup(attrs) {
 
 function buildInternalApi() {
   const s = () => services.settings;
+  let importedCsv = null;
   const importer = () => optional('./import/chrome', null);
   return {
     info: () => ({
@@ -418,18 +402,18 @@ function buildInternalApi() {
     }),
     getSettings: () => ({ ...DEFAULTS, ...s().data }),
     setSetting: (_e, key, value) => {
-      if (!Object.prototype.hasOwnProperty.call(DEFAULTS, key)) throw new Error('unknown setting');
+      checkSetting(key, value);
       s().set(key, value);
       return true;
     },
-    detectProfiles: () => {
+    detectProfiles: async () => {
       const imp = importer();
       return imp ? imp.detectProfiles() : [];
     },
     importProfile: async (_e, profileDir, what) => {
       const imp = importer();
       if (!imp) throw new Error('import is not available');
-      const profile = imp.detectProfiles().find((p) => p.dir === profileDir);
+      const profile = (await imp.detectProfiles()).find((p) => p.dir === profileDir);
       if (!profile) throw new Error('profile not found');
       const report = await imp.importProfile(profile, {
         what: what || { passwords: true, bookmarks: true, history: true, cookies: true },
@@ -448,11 +432,13 @@ function buildInternalApi() {
       });
       if (r.canceled || !r.filePaths[0]) return null;
       const report = await csv.importPasswordsCsv(r.filePaths[0], services.vault);
-      return { ...report, file: r.filePaths[0] };
+      importedCsv = r.filePaths[0];
+      return { ...report, file: importedCsv };
     },
     deleteFile: async (_e, file) => {
-      // Only the CSV the user just imported, and only a .csv.
-      if (typeof file !== 'string' || !file.endsWith('.csv')) throw new Error('not allowed');
+      // Only the CSV the user just picked and imported, once.
+      if (!importedCsv || file !== importedCsv) throw new Error('not allowed');
+      importedCsv = null;
       await fs.promises.unlink(file);
       return true;
     },
@@ -508,11 +494,22 @@ app.on('second-instance', (_e, otherArgv, cwd, data) => {
 });
 
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => {
+// Quitting waits for history, bookmarks and passwords to reach the disk (their
+// writes are async and debounced), at most 3 s, then quits for real.
+let flushedForQuit = false;
+app.on('before-quit', (event) => {
   quitting = true;
   saveSession();
+  // sync-ok: the session and settings are on disk before anything else at quit.
   for (const st of [sessionStore, services && services.settings]) try { st && st.flushSync(); } catch {}
-  if (services) for (const k of ['history', 'bookmarks', 'vault']) try { services[k] && services[k].flush(); } catch {}
+  if (flushedForQuit || !services) return;
+  event.preventDefault();
+  flushedForQuit = true;
+  const writes = ['history', 'bookmarks', 'vault'].map((k) => {
+    try { return services[k] ? Promise.resolve(services[k].flush()).catch(() => {}) : null; } catch { return null; }
+  });
+  const limit = new Promise((resolve) => setTimeout(resolve, 3000));
+  Promise.race([Promise.all(writes), limit]).then(() => app.quit());
 });
 
 app.on('login', (event, wc, details, authInfo, callback) => {
@@ -523,7 +520,7 @@ app.on('login', (event, wc, details, authInfo, callback) => {
 app.whenReady().then(async () => {
   const t0 = Date.now();
   const userData = app.getPath('userData');
-  const firstRun = !fs.existsSync(path.join(userData, 'settings.json'));
+  const firstRun = !fs.existsSync(path.join(userData, 'settings.json')); // sync-ok: startup
   const settings = new JsonStore(path.join(userData, 'settings.json'), DEFAULTS);
   if (firstRun) settings.set('tabs.position', settings.get('tabs.position'));
   sessionStore = new JsonStore(path.join(userData, 'session.json'), {}, { delay: 500 });
@@ -646,6 +643,17 @@ async function smokeTest() {
     if (!info) return fail('settings page: no internal API (page preload missing?)');
     const ui = await w.ui.webContents.executeJavaScript('document.readyState + " " + !!window.sn');
     if (ui !== 'complete true') return fail(`browser UI: ${ui}`);
+    // A web page cannot reach the internal pages: neither by navigating
+    // itself there nor through window.open (url.js mayOpen, window.js).
+    const page = w.newTab({ url: 'data:text/html,<title>web page</title>' });
+    for (let i = 0; i < 50 && (!page.webContents || page.webContents.isLoading() || !page.webContents.getURL().startsWith('data:')); i++) await sleep(100);
+    const pwc = page.webContents;
+    if (!pwc || !pwc.getURL().startsWith('data:')) return fail('could not open a web page');
+    await pwc.executeJavaScript('location.href = "supernova://settings/"; 1').catch(() => null);
+    const popup = await pwc.executeJavaScript('!!window.open("supernova://settings/")').catch(() => null);
+    await sleep(500);
+    if (!pwc.getURL().startsWith('data:')) return fail(`a web page navigated itself to ${pwc.getURL()}`);
+    if (popup !== false) return fail('a web page opened supernova://settings with window.open');
     clearTimeout(timer);
     console.log(`supernova: smoke ok ${JSON.stringify({
       version: info.version, electron: info.electron, chrome: info.chrome, vault: info.vault && info.vault.backend,

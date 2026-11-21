@@ -2,11 +2,19 @@
 // IPC: commands from the browser UI, sync config for page preloads, and the
 // small API of supernova:// pages (checked by sender URL on every call).
 
+const { internalAllowed } = require('./protocol');
+
 function registerIpc(ctx) {
   const { ipcMain } = ctx.electron;
   const { services } = ctx;
 
-  const winOf = (sender) => ctx.windowForWebContents(sender);
+  // UI commands come only from a window's own UI and float views, never from
+  // a page (whose renderer could be compromised) or DevTools.
+  const winOf = (sender) => {
+    const w = ctx.windowForWebContents(sender);
+    if (!w) return null;
+    return w.ui.webContents === sender || (w.float && w.float.webContents === sender) ? w : null;
+  };
 
   const commands = {
     activate: (w, id) => { const t = w.tabs.find((x) => x.id === id); if (t) w.activate(t); },
@@ -68,6 +76,11 @@ function registerIpc(ctx) {
     e.returnValue = services.media ? services.media.current() : { maxHeight: 0, maxFps: 0, rafFps: 0 };
   });
 
+  ipcMain.on('sn:edited', (e) => {
+    const found = ctx.findTab(e.sender);
+    if (found && found.tab) found.tab.edited = true;
+  });
+
   ipcMain.on('sn:nav', (e, dir) => {
     const found = ctx.findTab(e.sender);
     if (!found || !found.tab) return;
@@ -75,9 +88,9 @@ function registerIpc(ctx) {
   });
 
   ipcMain.handle('sn:internal', async (e, name, ...args) => {
-    const url = (e.senderFrame && e.senderFrame.url) || '';
-    if (!url.startsWith('supernova://settings') && !url.startsWith('supernova://error')) throw new Error('not allowed');
-    if (url.startsWith('supernova://error') && name !== 'theme') throw new Error('not allowed');
+    // The calling frame's own URL, and it must be the top frame.
+    const frame = e.senderFrame;
+    if (!frame || frame.parent || !internalAllowed(frame.url, name)) throw new Error('not allowed');
     const api = ctx.internalApi;
     if (!Object.prototype.hasOwnProperty.call(api, name)) throw new Error(`unknown: ${name}`);
     return api[name](e, ...args);

@@ -12,6 +12,7 @@ function uniquePath(dir, name) {
   const ext = path.extname(safe);
   const stem = ext ? safe.slice(0, -ext.length) : safe;
   let candidate = path.join(dir, safe);
+  // sync-ok: Electron needs the save path before will-download returns.
   for (let i = 1; fs.existsSync(candidate) || fs.existsSync(candidate + '.part'); i++) {
     candidate = path.join(dir, `${stem} (${i})${ext}`);
   }
@@ -31,7 +32,7 @@ function createDownloads({ settings, app, shell }) {
 
   function dir() {
     const d = settings.get('downloads.dir');
-    return d && fs.existsSync(d) ? d : app.getPath('downloads');
+    return d && fs.existsSync(d) ? d : app.getPath('downloads'); // sync-ok: as above
   }
 
   function attach(session, windowOf) {

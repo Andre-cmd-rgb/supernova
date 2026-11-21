@@ -196,3 +196,15 @@ test('calling it again updates the caps without wrapping twice', () => {
   assert.equal(p.run('MediaSource.isTypeSupported'), first);
   assert.equal(p.run(`MediaSource.isTypeSupported(${JSON.stringify(VP9(3840, 2160, 60))})`), true);
 });
+
+test('a callback can cancel a later one of the same frame', () => {
+  const p = fakePage();
+  p.apply({ maxHeight: 0, maxFps: 0, rafFps: 30 });
+  p.run(`globalThis.ran = [];
+    let b = 0;
+    requestAnimationFrame(() => { ran.push('a'); cancelAnimationFrame(b); });
+    b = requestAnimationFrame(() => ran.push('b'));
+    requestAnimationFrame(() => ran.push('c'));`);
+  p.advance(100);
+  assert.equal(p.run('ran.join()'), 'a,c');
+});

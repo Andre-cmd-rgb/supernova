@@ -9,6 +9,27 @@ const { WebContentsView } = require('electron');
 
 let nextId = 1;
 
+/**
+ * The web preferences of every page. test/autofill.test.js starts its page
+ * with these too, so it tests what ships.
+ */
+function pagePreferences(session) {
+  return {
+    session,
+    sandbox: true,
+    contextIsolation: true,
+    nodeIntegration: false,
+    // The page preload (autofill, video caps, the animation limit) runs in
+    // every frame, embedded players and sign-in iframes included. Frames
+    // stay sandboxed: this adds the preload, not Node.
+    nodeIntegrationInSubFrames: true,
+    spellcheck: true,
+    backgroundThrottling: true,
+    safeDialogs: true,
+    navigateOnDragDrop: true,
+  };
+}
+
 class Tab extends EventEmitter {
   /**
    * @param {object} opts
@@ -56,16 +77,7 @@ class Tab extends EventEmitter {
   }
 
   _createView(adopt) {
-    const webPreferences = {
-      session: this.session,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      spellcheck: true,
-      backgroundThrottling: true,
-      safeDialogs: true,
-      navigateOnDragDrop: true,
-    };
+    const webPreferences = pagePreferences(this.session);
     this.view = adopt ? new WebContentsView({ ...adopt, webPreferences: { ...(adopt.webPreferences || {}), ...webPreferences } })
       : new WebContentsView({ webPreferences });
     this.view.setBackgroundColor('#ffffff');
@@ -88,6 +100,7 @@ class Tab extends EventEmitter {
       this.url = url;
       this.hoverUrl = '';
       this.capturing = false;
+      this.edited = false;
       nav();
       this.emit('navigated', this, url);
     });
@@ -178,6 +191,8 @@ class Tab extends EventEmitter {
     this._timers = [];
   }
 
+  // Busy tabs are neither frozen nor discarded. `edited`: the user typed into
+  // this page (the page preload reports it), and a discard would lose it.
   _busy() {
     return this.audible || this.playing || this.capturing || this.loading || this.pinned ||
       (this.live && this.view.webContents.isCurrentlyAudible());
@@ -210,7 +225,7 @@ class Tab extends EventEmitter {
   }
 
   discard() {
-    if (!this.live || this._visible || this._busy()) return;
+    if (!this.live || this._visible || this._busy() || this.edited) return;
     this._clearTimers();
     const view = this.view;
     this._discarding = true;
@@ -248,4 +263,4 @@ class Tab extends EventEmitter {
   }
 }
 
-module.exports = { Tab };
+module.exports = { Tab, pagePreferences };

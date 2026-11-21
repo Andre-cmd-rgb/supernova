@@ -70,7 +70,7 @@ function readTheme({ prefersDark = false, dir = novaDir() } = {}) {
   ].filter(Boolean);
   for (const c of candidates) {
     try {
-      const text = fs.readFileSync(c.file, 'utf8');
+      const text = fs.readFileSync(c.file, 'utf8'); // sync-ok: a small file, at startup and on a theme switch
       const raw = c.kind === 'json' ? JSON.parse(text) : parseColorsToml(text);
       raw.source = c.file;
       return normalize(raw, prefersDark);
