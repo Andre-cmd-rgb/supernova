@@ -12,9 +12,13 @@ const ROUTES = {
   error: 'error.html',
 };
 
-function registerScheme(protocol) {
+// Electron takes one registerSchemesAsPrivileged() call per run, so every
+// scheme of ours goes into it: supernova:// and the ad blocker's surrogate
+// scheme (extra), which needs CORS and CSP bypass for redirected requests.
+function registerScheme(protocol, extra = []) {
   protocol.registerSchemesAsPrivileged([
     { scheme: 'supernova', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+    ...extra.map((s) => ({ scheme: s.scheme, privileges: { ...s.privileges } })),
   ]);
 }
 

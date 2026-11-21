@@ -11,7 +11,8 @@ chmod 700 "$tmp/run"
 node_bin="$(command -v node)"
 cd "$root"
 [ $# -eq 0 ] && set -- test/*.test.js
-exec env -i \
+# Not exec: the EXIT trap must run to remove the throwaway dirs.
+env -i \
   PATH="$(dirname "$node_bin"):/usr/bin:/bin" \
   HOME="$tmp/home" \
   XDG_CONFIG_HOME="$tmp/config" XDG_DATA_HOME="$tmp/data" XDG_STATE_HOME="$tmp/state" \

@@ -35,7 +35,10 @@ app.setDesktopName('supernova.desktop');
 const argv = process.argv.slice(app.isPackaged ? 1 : 2);
 const startPrivate = argv.includes('--private') || argv.includes('--incognito');
 applySwitches(app);
-registerScheme(protocol);
+// The ad blocker is loaded before ready: its surrogate scheme has to be
+// registered along with supernova:// (one registration per run).
+const adblockModule = optional('./adblock', {});
+registerScheme(protocol, adblockModule.SCHEME ? [adblockModule.SCHEME] : []);
 
 // Sites see Chrome, which they all support; "Electron" in the user agent makes
 // some of them (Google sign-in, Zoom) refuse or degrade.
@@ -532,7 +535,7 @@ app.whenReady().then(async () => {
   const { createBookmarks } = optional('./bookmarks', {});
   const { createVault } = optional('./passwords', {});
   const { registerAutofillIpc } = optional('./autofill-ipc', {});
-  const { createAdblock } = optional('./adblock', {});
+  const { createAdblock } = adblockModule;
   const { createMediaPolicy } = optional('./media-policy', {});
 
   services = {

@@ -140,7 +140,10 @@ test('load tolerates a missing or damaged file', async () => {
   assert.equal(h.size(), 0);
 });
 
-test('search over 20 000 entries takes under 5 ms', (t) => {
+// The command bar searches on every keystroke. On an idle P1 the worst median is
+// 1.6-2.7 ms; the limit is 25 ms so a busy machine (another build, a benchmark)
+// does not fail it, while a slower algorithm (sorting all 20 000 per key) would.
+test('search over 20 000 entries is fast enough to run per keystroke', (t) => {
   const h = createHistory({ dir: tmpDir() });
   const words = ['news', 'mail', 'docs', 'video', 'shop', 'maps', 'wiki', 'forum', 'blog', 'music', 'photo', 'cloud', 'code', 'game', 'travel', 'food'];
   const tlds = ['com', 'org', 'it', 'net', 'io', 'de'];
@@ -182,5 +185,5 @@ test('search over 20 000 entries takes under 5 ms', (t) => {
     if (median > worst) { worst = median; worstQuery = q; }
   }
   t.diagnostic(`worst median search time: ${worst.toFixed(2)} ms (query "${worstQuery}")`);
-  assert.ok(worst < 5, `search took ${worst.toFixed(2)} ms for "${worstQuery}"`);
+  assert.ok(worst < 25, `search took ${worst.toFixed(2)} ms for "${worstQuery}"`);
 });
