@@ -20,7 +20,7 @@ const { createShortcuts } = require('./shortcuts');
 const { createDownloads } = require('./downloads');
 const { createPermissions } = require('./permissions');
 const { registerIpc } = require('./ipc');
-const { fixup, displayHost, originOf } = require('./url');
+const { fixup, displayHost, originOf, ownArgs, urlsFrom } = require('./url');
 
 const ROOT = path.join(__dirname, '..', '..');
 const VERSION = require(path.join(ROOT, 'package.json')).version;
@@ -32,7 +32,7 @@ app.setPath('userData', path.join(app.getPath('appData'), 'supernova'));
 if (process.env.SUPERNOVA_PROFILE) app.setPath('userData', path.resolve(process.env.SUPERNOVA_PROFILE));
 app.setDesktopName('supernova.desktop');
 
-const argv = process.argv.slice(app.isPackaged ? 1 : 2);
+const argv = ownArgs(process.argv, app.isPackaged ? null : app.getAppPath());
 const startPrivate = argv.includes('--private') || argv.includes('--incognito');
 applySwitches(app);
 // The ad blocker is loaded before ready: its surrogate scheme has to be
@@ -60,18 +60,6 @@ function optional(modPath, fallback) {
     console.warn(`supernova: ${modPath} missing, running without it`);
     return fallback;
   }
-}
-
-function urlsFrom(args, cwd) {
-  const out = [];
-  for (const a of args) {
-    if (!a || a.startsWith('-')) continue;
-    if (/^[a-z][a-z0-9+.-]*:/i.test(a)) out.push(a);
-    // sync-ok: a stat per command-line argument, at start or a second launch
-    else if (fs.existsSync(path.resolve(cwd || process.cwd(), a))) out.push('file://' + path.resolve(cwd || process.cwd(), a));
-    else { const u = fixup(a); if (u) out.push(u); }
-  }
-  return out;
 }
 
 // ----- state --------------------------------------------------------------------
@@ -481,7 +469,7 @@ function widevineStatus() {
 // ----- start ---------------------------------------------------------------------------
 
 app.on('second-instance', (_e, otherArgv, cwd, data) => {
-  const args = (data && data.argv) || otherArgv.slice(1);
+  const args = (data && data.argv) || ownArgs(otherArgv, app.isPackaged ? null : app.getAppPath());
   const urls = urlsFrom(args, cwd);
   const wantPrivate = args.includes('--private') || args.includes('--incognito');
   if (wantPrivate || args.includes('--new-window') || !windows.size) {

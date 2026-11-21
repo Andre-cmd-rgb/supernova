@@ -58,3 +58,24 @@ test('display helpers', () => {
   assert.equal(originOf('https://accounts.google.com/v3/signin'), 'https://accounts.google.com');
   assert.equal(originOf('data:text/html,hi'), null);
 });
+
+test('ownArgs drops the app folder wherever the switches put it', () => {
+  const { ownArgs } = require('../src/main/url');
+  const app = '/opt/sn/app';
+  assert.deepEqual(ownArgs(['electron', app, 'https://a.com'], app), ['https://a.com']);
+  assert.deepEqual(ownArgs(['electron', '--ozone-platform=headless', app, 'https://a.com'], app), ['--ozone-platform=headless', 'https://a.com']);
+  assert.deepEqual(ownArgs(['electron', '--x', '/opt/sn/app/', 'b.com'], app), ['--x', 'b.com'], 'a trailing slash is the same folder');
+  assert.deepEqual(ownArgs(['supernova', '--private', 'https://a.com'], null), ['--private', 'https://a.com'], 'packaged: nothing to drop');
+});
+
+test('urlsFrom opens URLs, files and searches, never javascript:', () => {
+  const { urlsFrom } = require('../src/main/url');
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sn-args-'));
+  fs.writeFileSync(path.join(dir, 'page.html'), '<p>x</p>');
+  const out = urlsFrom(['--flag', 'https://a.com/', 'page.html', 'example.org', 'javascript:alert(1)', 'view-source:javascript:1', ''], dir);
+  assert.deepEqual(out, ['https://a.com/', 'file://' + path.join(dir, 'page.html'), 'https://example.org/']);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

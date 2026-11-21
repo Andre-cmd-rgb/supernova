@@ -88,14 +88,16 @@ fi
 echo "smoke: $line"
 
 # 2. A page from the command line. The title is only in the page, not in its
-# path, so seeing it in session.json means the page itself was loaded.
+# path, so seeing it in session.json means the page itself was loaded. The
+# switches go before the app folder here, as Electron allows (url.js ownArgs
+# and its test check that the folder is not taken for a page).
 clean_env url
 title=supernova-smoke-$$-$RANDOM
 page=$tmp/page/smoke-page.html
 mkdir -p "${page%/*}"
 printf '<!doctype html><meta charset="utf-8"><title>%s</title><p>%s</p>\n' "$title" "$title" >"$page"
 log=$tmp/url.log
-"${env_cmd[@]}" timeout -k 5 90 "$bin" "${app[@]}" "${flags[@]}" "$page" >"$log" 2>&1 &
+"${env_cmd[@]}" timeout -k 5 90 "$bin" "${flags[@]}" "${app[@]}" "$page" >"$log" 2>&1 &
 pid=$!
 found=0
 for ((i = 0; i < 300; i++)); do

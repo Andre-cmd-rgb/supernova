@@ -58,7 +58,7 @@ src/main/theme.js           Nova theme colours (+ fallback), live reload
 src/main/downloads.js       downloads
 src/main/permissions.js     permission prompts and remembered decisions
 src/main/protocol.js        supernova:// internal pages
-src/main/url.js             input -> URL or Google search (pure)
+src/main/url.js             typed input -> URL or search; command-line args; what a page may open
 src/main/search.js          Google suggestions
 src/main/power.js           battery or mains (powerMonitor; SUPERNOVA_FORCE_BATTERY=1|0)
 src/main/history.js         history store

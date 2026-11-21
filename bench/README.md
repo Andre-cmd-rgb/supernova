@@ -110,6 +110,27 @@ What they say:
   blocker. The find bar and prompts' renderer exists only while shown (it
   saved about 22 MiB when it stopped being permanent).
 
+### Where the memory goes
+
+Headless (`--ozone-platform=headless`), one Wikipedia article, a fresh
+profile with the compiled filter lists, PSS after 20 s, single runs:
+
+| process | ad blocking on | off |
+|---|---|---|
+| the page's renderer | 140 MiB | 130 MiB |
+| browser (Electron's main process: Node, the services) | 105 MiB | 96 MiB |
+| GPU process | 41 MiB | 45 MiB |
+| the browser UI's renderer | 34 MiB | 34 MiB |
+| network service (utility) | 31 MiB | 30 MiB |
+| zygotes and broker | 32 MiB | 31 MiB |
+| **total** | **383 MiB** | **366 MiB** |
+
+Ad blocking costs about 18 MiB: the engine in the browser process and its
+cosmetic filters in each page. The UI's renderer (34 MiB) is what Chrome does
+not have, since it draws its UI in the browser process. The find bar and
+prompts' renderer is not in the table, because it only exists while one of
+them is shown.
+
 ### A see-through window costs every frame
 
 Supernova, window, three runs each, alternating (`--translucent` against

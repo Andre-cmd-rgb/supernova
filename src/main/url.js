@@ -1,5 +1,9 @@
 'use strict';
-// What the user typed in the command bar -> a URL to load, or a Google search.
+// What the user typed in the command bar -> a URL to load, or a Google search;
+// what the command line asks to open; what a page may open.
+
+const fs = require('fs');
+const path = require('path');
 
 const SEARCH = 'https://www.google.com/search?q=';
 
@@ -132,4 +136,32 @@ function innerScheme(url) {
   return 'javascript'; // nested deeper than any real URL: refuse
 }
 
-module.exports = { fixup, fixupNav, searchUrl, displayHost, searchQueryOf, originOf, mayOpen };
+/**
+ * The browser's own command-line arguments, from process.argv. From source
+ * (`appDir` set) the app folder is among them, and Chromium switches may come
+ * before it (electron --ozone-platform=headless . url): the folder itself is
+ * dropped, not a fixed number of arguments.
+ */
+function ownArgs(processArgv, appDir = null) {
+  const dir = appDir ? path.resolve(appDir) : null;
+  return processArgv.slice(1).filter((a) => !dir || String(a).startsWith('-') || path.resolve(String(a)) !== dir);
+}
+
+/** What the command line asks to open: URLs, local files, or what to search. */
+function urlsFrom(args, cwd = process.cwd()) {
+  const out = [];
+  for (const a of args) {
+    if (!a || a.startsWith('-')) continue;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(a)) {
+      if (innerScheme(a) !== 'javascript') out.push(a);
+      continue;
+    }
+    const file = path.resolve(cwd, a);
+    // sync-ok: a stat per command-line argument, at start or a second launch
+    if (fs.existsSync(file)) out.push('file://' + file);
+    else { const u = fixup(a); if (u) out.push(u); }
+  }
+  return out;
+}
+
+module.exports = { fixup, fixupNav, searchUrl, displayHost, searchQueryOf, originOf, mayOpen, ownArgs, urlsFrom };
