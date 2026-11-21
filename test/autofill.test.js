@@ -410,7 +410,10 @@ function runElectron() {
     fs.writeFileSync(path.join(dir, 'main.js'), `(${electronMain.toString()})(${JSON.stringify(cfg)});\n`);
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;
-    const child = spawn(ELECTRON, ['--no-sandbox', '--no-zygote', '--ozone-platform=headless', '--disable-gpu',
+    // No --no-zygote: without the zygote every renderer starts from scratch and
+    // runs Electron's root check without the browser's --no-sandbox, so as root
+    // (the CI container) the sandboxed preload's renderer dies at about:blank.
+    const child = spawn(ELECTRON, ['--no-sandbox', '--ozone-platform=headless', '--disable-gpu',
       `--user-data-dir=${path.join(dir, 'profile')}`, path.join(dir, 'main.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     const debug = !!process.env.SN_AUTOFILL_E2E_DEBUG; // pipe Electron's output through
