@@ -21,6 +21,10 @@ const ASK = new Set([
 ]);
 
 function describe(permission, details) {
+  // getUserMedia for the desktop with audio also hands over the computer's sound.
+  if (permission === 'display-capture' && ((details && details.mediaTypes) || []).includes('audio')) {
+    return 'see your screen and hear your computer\'s sound';
+  }
   if (permission === 'media') {
     const types = details.mediaTypes || [];
     if (types.includes('video') && types.includes('audio')) return 'use your camera and microphone';
@@ -69,7 +73,7 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
   const writesOf = (isPrivate) => (isPrivate ? fileWrites.private : fileWrites.normal);
   // Screen sharing asked and allowed in the request handler: the display
   // handler that follows for the same tab and site skips its own prompt,
-  // once, within SCREEN_GRANT_MS. webContents id -> { origin, until }
+  // once, within SCREEN_GRANT_MS. webContents id -> { origin, until, isPrivate }
   const screenGrants = new Map();
   const SCREEN_GRANT_MS = 10000;
 
@@ -118,8 +122,17 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
 
   function attach(session) {
     const isPrivate = !session.isPersistent();
-    session.setPermissionRequestHandler(async (wc, permission, callback, details) => {
-      const origin = originOf(details.requestingUrl || (wc && wc.getURL()) || '');
+    // Electron's callback is answered exactly once, also when something here
+    // throws (a tab closed meanwhile): then with a refusal.
+    session.setPermissionRequestHandler((wc, permission, callback, details) => {
+      let answered = false;
+      const answer = (ok) => { if (!answered) { answered = true; callback(!!ok); } };
+      onRequest(wc, permission, answer, details || {}).catch(() => answer(false));
+    });
+
+    const onRequest = async (wc, permission, callback, details) => {
+      // The frame's own origin (an about:srcdoc frame has its parent's).
+      const origin = originOf(details.securityOrigin || details.requestingUrl || (wc && !wc.isDestroyed() && wc.getURL()) || '');
       if (ALWAYS.has(permission)) return callback(true);
       // File System Access: reading a file or folder the user picked (in the
       // file chooser, by dropping it, or on an earlier visit) is the pick
@@ -145,7 +158,8 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
         const answer = await prompt(wc, origin, permission, details, `wants to ${describe(permission, details)}`);
         if (answer === 'deny') remember(origin, ['display-capture'], 'deny', isPrivate);
         if (answer !== 'allow') return callback(false);
-        if (wc) screenGrants.set(wc.id, { origin, until: Date.now() + SCREEN_GRANT_MS });
+        for (const [id, g] of screenGrants) if (g.until < Date.now()) screenGrants.delete(id);
+        if (wc) screenGrants.set(wc.id, { origin, until: Date.now() + SCREEN_GRANT_MS, isPrivate });
         mark(wc, permission);
         return callback(true);
       }
@@ -165,7 +179,7 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
       if (permission !== 'openExternal' || answer === 'deny') remember(origin, keys, answer, isPrivate);
       if (answer === 'allow') mark(wc, permission);
       callback(answer === 'allow');
-    });
+    };
 
     session.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
       if (ALWAYS.has(permission)) return true;
@@ -243,7 +257,11 @@ function createPermissions({ settings, findTab, desktopCapturer, webContentsOfFr
   return {
     attach,
     /** The last private window closed: its decisions go with it. */
-    forgetPrivate() { sessionDecisions.clear(); fileWrites.private.clear(); },
+    forgetPrivate() {
+      sessionDecisions.clear();
+      fileWrites.private.clear();
+      for (const [id, g] of screenGrants) if (g.isPrivate) screenGrants.delete(id);
+    },
     respond(id, action) {
       for (const p of pending) if (p.id === id) { p.resolve(action); return true; }
       return false;

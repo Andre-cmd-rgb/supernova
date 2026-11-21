@@ -95,7 +95,11 @@ const ctx = {
   sessionFor,
   focused: (w) => { lastFocused = w; },
   lifecyclePolicy,
-  onNavigated(w, tab, url) {
+  onNavigated(w, tab, url, inPage) {
+    // A site's permission questions go with its page, as in Chrome: the next
+    // page is not asked them. (A password to save stays: it is shown as the
+    // form's page goes.)
+    if (!inPage && permissions) for (const p of permissions.pendingFor(tab)) try { p.cancel(); } catch {}
     if (!w.private && services.history && /^https?:/.test(url)) services.history.add({ url, title: tab.title });
   },
   onTitle(w, tab, title) {
@@ -616,13 +620,14 @@ app.whenReady().then(async () => {
     for (const u of urls.slice(1)) w.newTab({ url: u });
     // First start: the welcome page (import from Chrome). If a link opened
     // the browser, that link stays in front and the welcome waits beside it.
-    if (firstRun) {
-      ctx.openSettings(w, '#welcome', { background: urls.length > 0 });
-      // Now this profile has started once (a private first start shows no
-      // welcome page, so it does not count).
-      settings.replace({ ...settings.data });
-      try { settings.flushSync(); } catch (err) { console.error('supernova: could not save settings.json:', err.message); } // sync-ok: once, the first start
-    }
+    if (firstRun) ctx.openSettings(w, '#welcome', { background: urls.length > 0 });
+  }
+  // Now this profile has started once. A private first start does not count
+  // (it shows no welcome page); a session restored with no settings.json (a
+  // broken one set aside) does, and keeps its tabs.
+  if (firstRun && !startPrivate) {
+    settings.replace({ ...settings.data });
+    try { settings.flushSync(); } catch (err) { console.error('supernova: could not save settings.json:', err.message); } // sync-ok: once, the first start
   }
 
   if (services.adblock && services.adblock.scheduleUpdate) services.adblock.scheduleUpdate();

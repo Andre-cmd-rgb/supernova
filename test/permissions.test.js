@@ -8,16 +8,16 @@ const { createPermissions } = require('../src/main/permissions');
 
 const SITE = 'https://meet.example';
 
-function setup({ persistent = true, noTab = false, saved } = {}) {
+function setup({ persistent = true, noTab = false, saved, findTab } = {}) {
   const store = saved ? { permissions: saved } : {};
   const settings = { get: (k) => store[k], set: (k, v) => { store[k] = v; } };
   const prompts = [];
   const tab = { id: 1 };
   const win = { addPrompt: (p) => prompts.push(p), removePrompt() {} };
-  const wc = { id: 7, getURL: () => SITE + '/room' };
+  const wc = { id: 7, isDestroyed: () => false, getURL: () => SITE + '/room' };
   const perms = createPermissions({
     settings,
-    findTab: () => (noTab ? null : { win, tab }),
+    findTab: findTab || (() => (noTab ? null : { win, tab })),
     desktopCapturer: { getSources: async () => [{ id: 'screen:0' }] },
     webContentsOfFrame: () => wc,
   });
@@ -43,7 +43,7 @@ function setup({ persistent = true, noTab = false, saved } = {}) {
     if (action === 'dismiss') p.cancel(); else p.resolve(action);
     return p;
   };
-  return { store, prompts, request, share, check, answer, perms };
+  return { store, prompts, request, share, check, answer, perms, h };
 }
 
 test('reading a picked file needs no prompt; writing to it is asked once per file', async () => {
@@ -124,6 +124,33 @@ test('getUserMedia for the desktop is asked too: it never reaches the display ha
   assert.equal(await r, false);
 });
 
+test('desktop capture with sound says so', async () => {
+  const s = setup();
+  const r = s.request('display-capture', { mediaTypes: ['audio', 'video'] });
+  const p = await s.answer('deny');
+  assert.match(p.public.text, /see your screen and hear your computer's sound/);
+  assert.equal(await r, false);
+});
+
+test('Electron\'s callback is answered once, with a refusal, when something throws', async () => {
+  const s = setup({ findTab: () => { throw new Error('tab gone'); } });
+  assert.equal(await s.request('geolocation'), false);
+  // A tab already destroyed, and no requesting URL: refused, not thrown.
+  const calls = [];
+  const gone = { id: 9, isDestroyed: () => true, getURL() { throw new Error('Object has been destroyed'); } };
+  s.h.request(gone, 'geolocation', (ok) => calls.push(ok), {});
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(calls, [false]);
+});
+
+test('an about:srcdoc frame asks as its own origin', async () => {
+  const s = setup();
+  const r = s.request('geolocation', { requestingUrl: 'about:srcdoc', securityOrigin: SITE + '/' });
+  const p = await s.answer('allow');
+  assert.equal(p.public.host, 'meet.example');
+  assert.equal(await r, true);
+});
+
 test('the request handler\'s yes is good for one share, for that site, for seconds', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 });
   const s = setup();
@@ -192,4 +219,15 @@ test('private windows remember nothing on disk and forget on close', async () =>
   const again = s.request('geolocation');
   await s.answer('deny');
   assert.equal(await again, false, 'asked again after the last private window closed');
+});
+
+test('a private window\'s screen grant goes with it', async () => {
+  const s = setup({ persistent: false });
+  const asked = s.request('display-capture', { mediaTypes: ['video'] });
+  await s.answer('allow');
+  await asked;
+  s.perms.forgetPrivate();
+  const r = s.share();
+  await s.answer('dismiss'); // asked: the grant is gone
+  assert.equal(await r, null);
 });

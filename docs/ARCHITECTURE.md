@@ -134,9 +134,9 @@ Writes go to a temporary file of their own and are renamed over the file, mode
 way when quitting saved newer data) is dropped.
 
 A first start is one with no `settings.json` (a broken one, set aside, counts
-too): it shows the welcome page (import from Chrome), and writes the file
-once that page is up, so a first start in a private window does not use it
-up.
+too). With no session to restore it shows the welcome page (import from
+Chrome); either way it writes the file, except in a private window, so a
+first start there does not use it up.
 
 Settings keys (defaults, in `src/main/settings-schema.js`). The settings page
 may write only the keys it has a control for, with the values it offers
@@ -425,7 +425,9 @@ settings, findTab, desktopCapturer })` answers them, and
   `chromeMediaSource: "desktop"` reaches only the first and captures on its
   yes, with the same details. So the request handler asks, and its yes lets
   the display handler that follows for that tab and site skip its own
-  prompt once, within 10 s: one prompt either way. Refusals answer the
+  prompt once, within 10 s: one prompt either way. With sound
+  (`mediaTypes` has `audio`), the prompt says the site will also hear the
+  computer's sound. Refusals answer the
   display handler with `null` (Electron 45 throws on `{}`). A frame with no
   origin never gets the screen.
 - **Opening other apps** (`mailto:`, `zoommtg:`) is asked each time; a block
@@ -436,7 +438,12 @@ settings, findTab, desktopCapturer })` answers them, and
   asked once per site and file while the browser runs (each time if the file
   is not named), is not written to settings, and is forgotten with the site
   ("reset" in settings) or, for a private window, with the private session.
-- A prompt with no tab to show it in refuses and remembers nothing.
+- A prompt with no tab to show it in refuses and remembers nothing; a
+  request that fails on the way (a tab closed meanwhile) is refused, and
+  Electron's callback is always answered exactly once.
+- A site's permission prompts go when its tab navigates to another page (a
+  password-save prompt stays). Origins are the frame's own
+  (`securityOrigin`: an `about:srcdoc` frame asks as its parent's site).
 - DRM (Netflix, Spotify), fullscreen, pointer and keyboard lock, clipboard
   writes, speaker selection and storage access are allowed without asking
   (Electron allows third-party cookies anyway). Anything else is refused.

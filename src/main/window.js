@@ -122,8 +122,8 @@ class SnWindow extends EventEmitter {
     tab.on('changed', () => { if (tab === this.active) this._updateTitle(); this.pushState(); });
     tab.on('closed-by-page', () => this.closeTab(tab, { byPage: true }));
     tab.on('discarding', (_t, view) => { try { this.base.contentView.removeChildView(view); } catch {} });
-    tab.on('navigated', (_t, navUrl) => {
-      this.ctx.onNavigated(this, tab, navUrl);
+    tab.on('navigated', (_t, navUrl, inPage) => {
+      this.ctx.onNavigated(this, tab, navUrl, !!inPage);
       this.emit('session-changed');
     });
     tab.on('title', (_t, t) => this.ctx.onTitle(this, tab, t));
