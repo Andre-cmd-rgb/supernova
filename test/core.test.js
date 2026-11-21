@@ -37,6 +37,33 @@ test('JsonStore keeps a broken file aside instead of losing it', () => {
   assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('settings.json.broken-')));
 });
 
+test('JsonStore: the files are private, and a write at quit is never undone by a slower one', async () => {
+  const dir = tmp();
+  const file = path.join(dir, 'session.json');
+  const s = new JsonStore(file, {}, { delay: 5 });
+  s.set('k', 1);
+  await s.flush();
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+
+  // An async write of k=2 is on its way when quitting saves k=3 at once.
+  s.set('k', 2);
+  const slow = s.flush();
+  s.set('k', 3);
+  s.flushSync();
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).k, 3);
+  await slow;
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).k, 3, 'the older write did not land over it');
+
+  // Only an async write pending: quitting still writes it, at once.
+  s.set('k', 4);
+  const pending = s.flush();
+  s.flushSync();
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).k, 4);
+  await pending;
+  assert.deepEqual(fs.readdirSync(dir), ['session.json'], 'no temporary files left behind');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
 test('theme: Nova colors.toml is read, bad values fall back', () => {
   const dir = tmp();
   fs.mkdirSync(path.join(dir, 'theme'));
@@ -66,6 +93,12 @@ test('downloads: never overwrite, never escape the folder', () => {
   assert.equal(uniquePath(dir, 'a.pdf'), path.join(dir, 'a (1).pdf'));
   assert.equal(path.dirname(uniquePath(dir, '../../etc/passwd')), dir);
   assert.equal(path.basename(uniquePath(dir, '.bashrc')), '_bashrc');
+  // A download still in progress holds its name: on disk only as .crdownload,
+  // or not yet at all.
+  fs.writeFileSync(path.join(dir, 'b.zip.crdownload'), '');
+  assert.equal(uniquePath(dir, 'b.zip'), path.join(dir, 'b (1).zip'));
+  const reserved = new Set([path.join(dir, 'c.iso')]);
+  assert.equal(uniquePath(dir, 'c.iso', reserved), path.join(dir, 'c (1).iso'));
 });
 
 test('permissions: camera and microphone remembered apart', () => {

@@ -250,7 +250,7 @@ function pick(i, { newTab = false } = {}) {
   const input = $('pinput').value.trim();
   if (!it) { if (input) sn.cmd('go', input, { newTab: pal.newTab || newTab }); return; }
   if (it.type === 'tab' && !newTab) { sn.cmd('activate', it.tabId); sn.cmd('palette', false); return; }
-  sn.cmd('go', it.url, { newTab: pal.newTab || newTab });
+  sn.cmd('go', it.type === 'url' && it.typed ? it.typed : it.url, { newTab: pal.newTab || newTab });
 }
 
 if (VIEW === 'chrome') {

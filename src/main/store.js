@@ -1,6 +1,7 @@
 'use strict';
 // JsonStore: a small JSON file with dotted-key access, loaded once at startup
-// and written atomically (tmp + rename) a moment after the last change.
+// and written atomically (tmp + rename) a moment after the last change. The
+// files are the user's own (settings, the open tabs): mode 0600.
 
 const fs = require('fs');
 const path = require('path');
@@ -15,15 +16,10 @@ function getPath(obj, keys) {
   return cur;
 }
 
-function setPath(obj, keys, value) {
-  let cur = obj;
-  for (let i = 0; i < keys.length - 1; i++) {
-    const k = keys[i];
-    if (cur[k] == null || typeof cur[k] !== 'object' || Array.isArray(cur[k])) cur[k] = {};
-    cur = cur[k];
-  }
-  cur[keys[keys.length - 1]] = value;
-}
+// Every write gets its own temporary file, so a synchronous write at quit
+// never shares one with an async write still in flight.
+let tmpCount = 0;
+const tmpFor = (file) => `${file}.tmp-${process.pid}-${++tmpCount}`;
 
 class JsonStore extends EventEmitter {
   constructor(file, defaults = {}, { delay = 200 } = {}) {
@@ -34,6 +30,8 @@ class JsonStore extends EventEmitter {
     this.data = {};
     this._timer = null;
     this._writing = null;
+    this._gen = 0; // bumped on every change
+    this._savedGen = 0; // the newest change known to be on disk
     try {
       this.data = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; // sync-ok: startup
     } catch (err) {
@@ -60,6 +58,7 @@ class JsonStore extends EventEmitter {
     const before = JSON.stringify(this.get(key));
     this.data[key] = value;
     if (JSON.stringify(value) === before) return;
+    this._gen++;
     this.emit('change', key, value);
     this._schedule();
   }
@@ -67,21 +66,35 @@ class JsonStore extends EventEmitter {
   /** Replace the whole document (used by simple stores such as session.json). */
   replace(data) {
     this.data = data;
+    this._gen++;
     this._schedule();
   }
 
   _schedule() {
     clearTimeout(this._timer);
-    this._timer = setTimeout(() => { this._timer = null; this._write(); }, this.delay);
+    this._timer = setTimeout(() => {
+      this._timer = null;
+      this._write().catch((err) => console.error(`supernova: could not save ${path.basename(this.file)}:`, err.message));
+    }, this.delay);
   }
 
   async _write() {
+    const gen = this._gen;
     const body = JSON.stringify(this.data, null, 1);
-    const tmp = `${this.file}.tmp`;
     const run = async () => {
-      await fs.promises.mkdir(path.dirname(this.file), { recursive: true });
-      await fs.promises.writeFile(tmp, body);
-      await fs.promises.rename(tmp, this.file);
+      if (this._savedGen >= gen) return; // a later write already saved it
+      const tmp = tmpFor(this.file);
+      try {
+        await fs.promises.mkdir(path.dirname(this.file), { recursive: true });
+        await fs.promises.writeFile(tmp, body, { mode: 0o600 });
+        // flushSync (quitting) may have saved newer data meanwhile.
+        if (this._savedGen >= gen) { await fs.promises.unlink(tmp); return; }
+        await fs.promises.rename(tmp, this.file);
+        this._savedGen = Math.max(this._savedGen, gen);
+      } catch (err) {
+        fs.promises.unlink(tmp).catch(() => {});
+        throw err;
+      }
     };
     this._writing = (this._writing || Promise.resolve()).then(run, run);
     return this._writing;
@@ -97,15 +110,17 @@ class JsonStore extends EventEmitter {
     }
   }
 
-  /** Synchronous last-chance write, for quitting. */
+  /** Synchronous last-chance write, for quitting: also when an async write
+   *  is still on its way, since the process may end before it lands. */
   flushSync() {
-    if (!this._timer) return;
     clearTimeout(this._timer);
     this._timer = null;
-    const tmp = `${this.file}.tmp`;
+    if (this._savedGen >= this._gen) return;
+    const tmp = tmpFor(this.file);
     fs.mkdirSync(path.dirname(this.file), { recursive: true }); // sync-ok: at quit
-    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 1)); // sync-ok: at quit
+    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 1), { mode: 0o600 }); // sync-ok: at quit
     fs.renameSync(tmp, this.file); // sync-ok: at quit
+    this._savedGen = this._gen;
   }
 }
 

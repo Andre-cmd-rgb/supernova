@@ -444,6 +444,13 @@ test('$redirect filters get a surrogate from the adblock scheme instead of a can
   // Without the per-run secret a page cannot fetch surrogates.
   const forged = await handler({ url: `${SCHEME.scheme}://r/guess/google-analytics_ga.js`, method: 'GET' });
   assert.equal(forged.status, 404);
+  // With it, names the library chokes on are a 404, not an exception (an
+  // unknown name ending .js gets the library's empty script, by design).
+  const prefix = js.redirectURL.slice(0, js.redirectURL.lastIndexOf('/') + 1);
+  for (const name of ['__proto__', 'constructor']) {
+    const r = await handler({ url: prefix + name, method: 'GET' });
+    assert.equal(r.status, 404, name);
+  }
   // The same URL as a document is not redirected: plain filters never touch pages.
   assert.equal(verdict(await send(ses, { url: 'https://pixel.example/', resourceType: 'mainFrame', webContentsId: 4, webContents: tab })), 'pass');
 });
@@ -724,6 +731,27 @@ test('cosmetic IPC: styles and scriptlets for the top frame of a matching site',
   await w.ipc.invoke(COSMETICS, other.event, 'https://blog.example/');
   assert.ok(other.wc.css.every(({ css }) => !/ad-banner/.test(css)));
   assert.equal(other.frame.scripts.length, 0);
+});
+
+test('cosmetic IPC trusts the frame, not the message: its URL, top frames only, and it must still exist', async (t) => {
+  const { w, ses } = await ready(t);
+  // A blog asking for the news site's rules gets the blog's.
+  const liar = cosmeticEvent(ses, 'https://blog.example/');
+  await w.ipc.invoke(COSMETICS, liar.event, 'https://news.example/article');
+  assert.ok(liar.wc.css.every(({ css }) => !/ad-banner/.test(css)));
+  assert.equal(liar.frame.scripts.length, 0);
+  // A subframe of the news site: nothing (the styles would land in the top frame).
+  const sub = cosmeticEvent(ses, 'https://news.example/article');
+  sub.frame.parent = { url: 'https://host.example/' };
+  await w.ipc.invoke(COSMETICS, sub.event, 'https://news.example/article');
+  assert.deepEqual(sub.wc.css, []);
+  assert.deepEqual(sub.frame.scripts, []);
+  // The frame went away before the message arrived.
+  const gone = cosmeticEvent(ses, 'https://news.example/article');
+  gone.event.senderFrame = null;
+  await w.ipc.invoke(COSMETICS, gone.event, 'https://news.example/article');
+  assert.deepEqual(gone.wc.css, []);
+  assert.deepEqual(gone.wc.scripts, []);
 });
 
 test('cosmetic IPC answers nothing when the site is allowlisted, blocking is off or the page is not on the web', async (t) => {

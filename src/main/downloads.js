@@ -7,21 +7,24 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 
-function uniquePath(dir, name) {
+// A name in the folder that nothing uses: no file, no download in progress
+// (`reserved`: the paths of downloads not finished yet, which exist on disk
+// only as Chromium's .crdownload until they finish).
+function uniquePath(dir, name, reserved = new Set()) {
   const safe = (name || 'download').replace(/[/\0]/g, '_').replace(/^\.+/, '_').slice(0, 200) || 'download';
   const ext = path.extname(safe);
   const stem = ext ? safe.slice(0, -ext.length) : safe;
-  let candidate = path.join(dir, safe);
   // sync-ok: Electron needs the save path before will-download returns.
-  for (let i = 1; fs.existsSync(candidate) || fs.existsSync(candidate + '.part'); i++) {
-    candidate = path.join(dir, `${stem} (${i})${ext}`);
-  }
+  const taken = (p) => reserved.has(p) || ['', '.crdownload', '.part'].some((s) => fs.existsSync(p + s));
+  let candidate = path.join(dir, safe);
+  for (let i = 1; taken(candidate); i++) candidate = path.join(dir, `${stem} (${i})${ext}`);
   return candidate;
 }
 
 function createDownloads({ settings, app, shell }) {
   const em = new EventEmitter();
   const items = new Map();
+  const inProgress = new Set(); // save paths of unfinished downloads
   let nextId = 1;
   let throttle = null;
   const changed = (urgent) => {
@@ -38,7 +41,8 @@ function createDownloads({ settings, app, shell }) {
   function attach(session, windowOf) {
     session.on('will-download', (_e, item, wc) => {
       const id = nextId++;
-      const target = uniquePath(dir(), item.getFilename());
+      const target = uniquePath(dir(), item.getFilename(), inProgress);
+      inProgress.add(target);
       item.setSavePath(target);
       const win = windowOf(wc);
       const d = {
@@ -55,6 +59,7 @@ function createDownloads({ settings, app, shell }) {
         changed(false);
       });
       item.once('done', (_ev, state) => {
+        inProgress.delete(target);
         d.state = state;
         d.received = item.getReceivedBytes();
         d.item = null;

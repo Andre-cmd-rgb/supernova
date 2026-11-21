@@ -92,6 +92,9 @@ class SnWindow extends EventEmitter {
     this.base.on('focus', () => ctx.focused(this));
     this.base.on('close', () => { this._closing = true; this.emit('close', this); });
     this.base.on('closed', () => {
+      // A question still waiting (a permission, a password to save, a
+      // sign-in) is answered "dismiss", so nothing hangs on a closed window.
+      for (const t of this.tabs) for (const p of this.ctx.pendingPrompts(t)) p.cancel();
       for (const t of this.tabs) t.destroy();
       clearTimeout(this._floatIdle);
       for (const v of [this.ui, this.float]) try { if (v) v.webContents.close(); } catch {}
@@ -573,8 +576,9 @@ class SnWindow extends EventEmitter {
       items.push({ label: 'Add to dictionary', click: () => wc.session.addWordToSpellCheckerDictionary(p.misspelledWord) });
       sep();
     }
-    // A page's links open only where the page itself could go (url.js mayOpen).
-    const from = wc.getURL();
+    // A page's links open only where the frame they are in could go (url.js
+    // mayOpen): a web frame inside a local page does not open local files.
+    const from = p.frameURL || wc.getURL();
     if (p.linkURL && mayOpen(from, p.linkURL)) {
       items.push({ label: 'Open link in new tab', click: () => this.newTab({ url: p.linkURL, background: true, opener: tab }) });
       if (!this.private) items.push({ label: 'Open link in private window', click: () => this.ctx.newWindow({ private: true, url: p.linkURL }) });

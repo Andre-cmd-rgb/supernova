@@ -75,7 +75,16 @@ test('urlsFrom opens URLs, files and searches, never javascript:', () => {
   const path = require('node:path');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sn-args-'));
   fs.writeFileSync(path.join(dir, 'page.html'), '<p>x</p>');
-  const out = urlsFrom(['--flag', 'https://a.com/', 'page.html', 'example.org', 'javascript:alert(1)', 'view-source:javascript:1', ''], dir);
-  assert.deepEqual(out, ['https://a.com/', 'file://' + path.join(dir, 'page.html'), 'https://example.org/']);
+  fs.writeFileSync(path.join(dir, 'my notes #2?.html'), '<p>x</p>');
+  const out = urlsFrom(['--flag', 'https://a.com/', 'page.html', 'my notes #2?.html', 'example.org', 'localhost:3000', 'magnet:?xt=1', 'javascript:alert(1)', 'view-source:javascript:1', 'java\tscript:alert(1)', ''], dir);
+  assert.deepEqual(out, [
+    'https://a.com/',
+    'file://' + path.join(dir, 'page.html'),
+    'file://' + path.join(dir, 'my%20notes%20%232%3F.html'),
+    'https://example.org/',
+    'http://localhost:3000/',
+    'magnet:?xt=1',
+  ]);
+  assert.equal(new URL(out[2]).pathname, path.join(dir, 'my%20notes%20%232%3F.html'), 'the whole name is the path');
   fs.rmSync(dir, { recursive: true, force: true });
 });

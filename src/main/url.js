@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
 
 const SEARCH = 'https://www.google.com/search?q=';
 
@@ -105,8 +106,12 @@ function originOf(url) {
   }
 }
 
+// As a URL parser reads it: tabs and newlines anywhere are dropped, control
+// characters and spaces around it too ("java\tscript:" is javascript:).
+const cleanUrl = (url) => String(url || '').replace(/[\t\n\r]/g, '').replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '');
+
 const schemeOf = (url) => {
-  const m = /^([a-z][a-z0-9+.-]*):/i.exec(String(url || '').trim());
+  const m = /^([a-z][a-z0-9+.-]*):/i.exec(cleanUrl(url));
   return m ? m[1].toLowerCase() : '';
 };
 
@@ -127,11 +132,11 @@ function mayOpen(from, to) {
 // The scheme that decides: view-source:, blob: and filesystem: wrap another
 // URL (view-source:file:///etc/passwd is a file).
 function innerScheme(url) {
-  let rest = String(url || '').trim();
+  let rest = cleanUrl(url);
   for (let i = 0; i < 4; i++) {
     const s = schemeOf(rest);
     if (s !== 'view-source' && s !== 'blob' && s !== 'filesystem') return s;
-    rest = rest.slice(s.length + 1).trim();
+    rest = cleanUrl(rest.slice(s.length + 1));
   }
   return 'javascript'; // nested deeper than any real URL: refuse
 }
@@ -151,15 +156,14 @@ function ownArgs(processArgv, appDir = null) {
 function urlsFrom(args, cwd = process.cwd()) {
   const out = [];
   for (const a of args) {
-    if (!a || a.startsWith('-')) continue;
-    if (/^[a-z][a-z0-9+.-]*:/i.test(a)) {
-      if (innerScheme(a) !== 'javascript') out.push(a);
-      continue;
-    }
+    if (!a || a.startsWith('-') || innerScheme(a) === 'javascript') continue;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(a) || SCHEMES.test(a)) { out.push(a); continue; }
     const file = path.resolve(cwd, a);
     // sync-ok: a stat per command-line argument, at start or a second launch
-    if (fs.existsSync(file)) out.push('file://' + file);
-    else { const u = fixup(a); if (u) out.push(u); }
+    if (fs.existsSync(file)) { out.push(pathToFileURL(file).href); continue; } // "a b#1.html" stays one file
+    const u = fixup(a);
+    // "localhost:3000" is an address; "magnet:?xt=…" is left for another app.
+    if (u) out.push(u.startsWith(SEARCH) && schemeOf(a) ? a : u);
   }
   return out;
 }

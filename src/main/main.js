@@ -139,8 +139,15 @@ const ctx = {
   },
   openSettings(w, hash = '', { background = false } = {}) {
     const existing = w.tabs.find((t) => t.url.startsWith('supernova://settings'));
-    if (existing) { if (!background) w.activate(existing); if (hash) existing.navigate(`supernova://settings/${hash}`); return; }
-    w.newTab({ url: `supernova://settings/${hash}`, background, lazy: background });
+    if (existing) {
+      if (!background) w.activate(existing);
+      if (hash) existing.navigate(`supernova://settings/${hash}`);
+    } else {
+      w.newTab({ url: `supernova://settings/${hash}`, background, lazy: background });
+    }
+    // In front, nothing covers it: a new window with no tabs opens the command
+    // bar, which would otherwise stay over the first start's welcome page.
+    if (!background) w.closePalette();
   },
   openDownloadsFolder() { downloads.openFolder(); },
   quit() { app.quit(); },
@@ -250,6 +257,7 @@ function newWindow(opts = {}) {
       const ses = privateSession;
       privateSession = null;
       permissions.forgetPrivate();
+      if (services.adblock) services.adblock.detach(ses);
       ses.clearStorageData().catch(() => {});
       ses.clearCache().catch(() => {});
     }
@@ -288,7 +296,9 @@ async function suggestFor(w, query) {
   const lower = q.toLowerCase();
   const direct = fixup(q);
   const isUrl = direct && !direct.startsWith('https://www.google.com/search?q=');
-  out.push(isUrl ? { type: 'url', title: direct, url: direct } : { type: 'search', title: q, url: direct });
+  // The address item carries what was typed: going there re-reads it
+  // (fixupNav), so an address tried over https can fall back to http.
+  out.push(isUrl ? { type: 'url', title: direct, url: direct, typed: q } : { type: 'search', title: q, url: direct });
   for (const t of w.tabs) {
     if (out.length >= 4) break;
     if ((t.title || '').toLowerCase().includes(lower) || (t.url || '').toLowerCase().includes(lower)) {
@@ -473,7 +483,8 @@ app.on('second-instance', (_e, otherArgv, cwd, data) => {
   const urls = urlsFrom(args, cwd);
   const wantPrivate = args.includes('--private') || args.includes('--incognito');
   if (wantPrivate || args.includes('--new-window') || !windows.size) {
-    newWindow({ private: wantPrivate, url: urls[0] });
+    const w = newWindow({ private: wantPrivate, url: urls[0] });
+    for (const u of urls.slice(1)) w.newTab({ url: u });
     return;
   }
   const w = lastFocused && windows.has(lastFocused) ? lastFocused : [...windows][0];
@@ -590,8 +601,10 @@ app.whenReady().then(async () => {
   // Restore the last session, then open what the command line asked for.
   const urls = urlsFrom(argv);
   const saved = !startPrivate && sessionStore.data && Array.isArray(sessionStore.data.windows) ? sessionStore.data.windows : [];
-  if (startPrivate) newWindow({ private: true, url: urls[0] });
-  else if (saved.length) {
+  if (startPrivate) {
+    const w = newWindow({ private: true, url: urls[0] });
+    for (const u of urls.slice(1)) w.newTab({ url: u });
+  } else if (saved.length) {
     saved.forEach((sw, i) => newWindow({ ...sw, url: i === saved.length - 1 ? urls[0] : undefined }));
     const last = [...windows].pop();
     for (const u of urls.slice(1)) last.newTab({ url: u });
@@ -621,6 +634,9 @@ async function smokeTest() {
   try {
     const w = [...windows][0];
     if (!w) return fail('no window');
+    // A fresh profile: the first start's welcome page is in front, uncovered.
+    if (!w.active || !w.active.url.startsWith('supernova://settings/#welcome')) return fail(`first start shows ${w.active ? w.active.url : 'no tab'}, not the welcome page`);
+    if (w.overlay) return fail('the command bar covers the welcome page');
     ctx.openSettings(w);
     const wc = w.active && w.active.webContents;
     if (!wc) return fail('no settings tab');

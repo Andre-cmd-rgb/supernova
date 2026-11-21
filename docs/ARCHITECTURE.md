@@ -124,7 +124,12 @@ store.get('adblock.enabled')            // dotted keys, falls back to defaults
 store.set('adblock.enabled', false)     // schedules an atomic write (200 ms debounce)
 store.on('change', (key, value) => {})  // EventEmitter
 await store.flush()
+store.flushSync()                       // at quit: writes now, even with an async write on its way
 ```
+
+Writes go to a temporary file of their own and are renamed over the file, mode
+0600. A write that would land after a newer one (an async write still on its
+way when quitting saved newer data) is dropped.
 
 Settings keys (defaults, in `src/main/settings-schema.js`). The settings page
 may write only the keys it has a control for, with the values it offers
@@ -141,8 +146,8 @@ itself.
 | `adblock.enabled` | `true` | |
 | `adblock.allowlist` | `[]` | hostnames (registrable domains) with blocking off |
 | `adblock.cookieBanners` | `false` | also hide cookie-consent banners |
-| `video.maxHeightOnBattery` | `1080` | 0 = no cap; 720/1080/1440/2160 |
-| `video.maxHeightOnAC` | `0` | |
+| `video.maxHeightOnBattery` | `1080` | 0 = no cap; 720/1080/1440 |
+| `video.maxHeightOnAC` | `0` | 0 = no cap; 1080/1440/2160 |
 | `video.prefer30fpsOnBattery` | `false` | reject >30 fps streams on battery |
 | `animations.limitOnBattery` | `true` | requestAnimationFrame at 30 fps on battery |
 | `tabs.freezeAfterMin` | `{ "ac": 10, "battery": 2 }` | hidden tab -> frozen (no JS, no timers) |
@@ -205,10 +210,10 @@ vault.importMany(entries)             // -> { added, updated, skipped }
 await vault.flush();
 ```
 
-`origin` is `scheme://host[:port]`. Matching for autofill: exact origin first,
-then same registrable domain over https (accounts.google.com vs google.com is
-NOT merged unless exact; keep it simple and safe: exact origin, plus http->https
-upgrade of the same host). The whole vault is one JSON blob encrypted with
+`origin` is `scheme://host[:port]`. Matching for autofill: the exact origin,
+then, for an https page, what was saved for the same host over http (a site
+that moved to https). Nothing else: accounts.google.com and google.com are
+not merged. The whole vault is one JSON blob encrypted with
 `safeStorage.encryptString`; main.js appends the switch
 `--password-store=gnome-libsecret`, so the key lives in the login keyring.
 
@@ -305,7 +310,10 @@ A top-level page is only blocked by a filter that names documents (`$document`,
 unhooked and no lists are downloaded. A damaged cache is rebuilt from the
 lists; with no cache and no network the browser starts without blocking and
 retries with a doubling backoff (2 min up to 1 h). One list build runs at a
-time. Behaviour: `test/adblock.test.js`; cost: `bench/adblock-cost.mjs`
+time. Cosmetic filters and scriptlets go to top-level pages only, chosen by
+the URL of the frame that asks (`event.senderFrame`), never by a URL the page
+sends; a surrogate script the library does not have is a 404. Behaviour:
+`test/adblock.test.js`; cost: `bench/adblock-cost.mjs`
 (~11 ms engine load, ~8 us p50 / ~50 us p99 per request).
 
 ### Media policy
@@ -383,8 +391,36 @@ error page only `theme`. A web page cannot get there: `mayOpen(from, to)` in
 itself, and `window.js` applies it to every cross-document navigation a page
 starts (`will-frame-navigate`, judged by the frame that started it; a file
 dropped on the page may open), to redirects, `window.open` and the context
-menu. The error page retries only http(s) addresses. Smoke mode checks that a
-page can neither navigate itself there, nor open it, nor frame it.
+menu (judged by the frame the click was in). Schemes are read as a URL parser
+reads them (tabs and newlines dropped, control characters around the URL
+trimmed), so `super\tnova:` is `supernova:`. The error page retries only
+http(s) addresses. Smoke mode checks that a page can neither navigate itself
+there, nor open it, nor frame it.
+
+### Permissions (`src/main/permissions.js`)
+
+Sites ask through Electron's permission handlers; `createPermissions({
+settings, findTab, desktopCapturer })` answers them, and
+`test/permissions.test.js` holds the behaviour:
+
+- Camera, microphone, location, notifications, MIDI and the like are asked in
+  a prompt over the page; Allow and Block are remembered per origin in the
+  `permissions` setting (camera and microphone apart). A site allowed either
+  may also read the devices' names.
+- **Screen sharing** is asked every time; only Block is remembered. A frame
+  with no origin never gets the screen.
+- **Opening other apps** (`mailto:`, `zoommtg:`) is asked each time; a block
+  sticks.
+- **Files a page was given** (the File System Access API): reading the file
+  the user picked needs no prompt; saving changes to it is asked once per
+  site and file while the browser runs, and is not written to settings.
+- DRM (Netflix, Spotify), fullscreen, pointer and keyboard lock, clipboard
+  writes, speaker selection and storage access are allowed without asking
+  (Electron allows third-party cookies anyway). Anything else is refused.
+- Private windows keep their decisions in memory, forgotten when the last
+  private window closes, together with the session's data and its ad
+  blocker hooks.
+- A window or tab that closes answers its waiting prompts "dismiss".
 
 ### Address input (`src/main/url.js`)
 

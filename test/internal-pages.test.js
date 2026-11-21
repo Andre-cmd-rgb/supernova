@@ -67,6 +67,11 @@ test('a web page can open neither internal pages nor local files', () => {
   assert.equal(mayOpen(web, 'supernova://settings/'), false);
   assert.equal(mayOpen(web, 'SUPERNOVA://settings/error.html?url=javascript:alert(1)'), false);
   assert.equal(mayOpen(web, ' supernova://settings/'), false);
+  assert.equal(mayOpen(web, '\x01supernova://settings/'), false);
+  assert.equal(mayOpen(web, 'super\tnova://settings/'), false);
+  assert.equal(mayOpen(web, 'fi\nle:///etc/passwd'), false);
+  assert.equal(mayOpen(web, 'java\r\nscript:alert(1)'), false);
+  assert.equal(mayOpen(web, 'view-source:\x00 file:///etc/passwd'), false);
   assert.equal(mayOpen(web, 'file:///home/user/.ssh/id_ed25519'), false);
   assert.equal(mayOpen(web, 'javascript:alert(1)'), false);
   assert.equal(mayOpen(web, 'view-source:file:///etc/passwd'), false);

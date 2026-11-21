@@ -111,9 +111,9 @@ class Tab extends EventEmitter {
       changed();
     });
     wc.on('update-target-url', (_e, url) => { this.hoverUrl = url; changed(); });
-    wc.on('audio-state-changed', (e) => { this.audible = !!e.audible; changed(); this.reschedule(); });
-    wc.on('media-started-playing', () => { this.playing = true; this.reschedule(); });
-    wc.on('media-paused', () => { this.playing = false; this.reschedule(); });
+    wc.on('audio-state-changed', (e) => { this.audible = !!e.audible; changed(); this._activityChanged(); });
+    wc.on('media-started-playing', () => { this.playing = true; this._activityChanged(); });
+    wc.on('media-paused', () => { this.playing = false; this._activityChanged(); });
     wc.on('render-process-gone', (_e, details) => {
       if (details.reason === 'clean-exit') return;
       this.crashed = true;
@@ -172,6 +172,14 @@ class Tab extends EventEmitter {
     this.reschedule();
   }
 
+  // Playing or sound started or stopped. A hidden tab's sleep timers count
+  // from when it went quiet, not from when it was last shown: music paused
+  // after an hour in the background must not discard the tab at once.
+  _activityChanged() {
+    if (!this._visible && !this._busy()) this.lastShown = Date.now();
+    this.reschedule();
+  }
+
   /** Re-plan sleep timers (after hide, power change, audio change). */
   reschedule() {
     this._clearTimers();
@@ -200,6 +208,8 @@ class Tab extends EventEmitter {
   async freeze() {
     if (!this.live || this.frozen || this._visible || this._busy()) return;
     if (await this._setLifecycle('frozen')) {
+      // Shown (or started playing) while the freeze was on its way: undo it.
+      if (this._visible || this._busy()) { await this._setLifecycle('active'); return; }
       this.frozen = true;
       this.emit('changed', this);
     }

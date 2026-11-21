@@ -1,6 +1,7 @@
 'use strict';
 // Autofill: main side with fakes (plain Node), page side in a headless
-// Electron (skipped when .electron/electron is missing or cannot start).
+// Electron (skipped when .electron/electron is missing or SN_SKIP_ELECTRON_TESTS
+// is set; an Electron that is there but cannot start is a failure).
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -450,7 +451,7 @@ const canRunElectron = fs.existsSync(ELECTRON) && !process.env.SN_SKIP_ELECTRON_
 
 test('page side in a real (headless) Electron', { skip: canRunElectron ? false : 'no .electron/electron', timeout: 90000 }, async (t) => {
   const run = await runElectron();
-  if (run.error) { t.skip(`electron could not run: ${run.error}`); return; }
+  assert.equal(run.error, undefined, `electron could not run: ${run.error} (SN_SKIP_ELECTRON_TESTS=1 skips this)`);
   assert.equal(run.failed, undefined, run.failed);
   const r = run.result;
   if (!r.sandbox) t.diagnostic('esbuild not installed: ran the preload unbundled and unsandboxed');

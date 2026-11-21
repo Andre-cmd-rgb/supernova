@@ -556,7 +556,9 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     if (engine === null || !url.startsWith(surrogatePrefix)) return new Response(null, { status: 404 });
     let name = '';
     try { name = decodeURIComponent(url.slice(surrogatePrefix.length)); } catch {}
-    const r = engine.resources.getResource(name);
+    let r = null;
+    try { r = engine.resources.getResource(name); } catch {} // e.g. "__proto__"
+    if (!r || typeof r.contentType !== 'string') return new Response(null, { status: 404 });
     const base64 = /;base64$/.test(r.contentType);
     const type = base64 ? r.contentType.slice(0, -7) : r.contentType;
     const body = base64 ? Buffer.from(r.body, 'base64') : r.body;
@@ -614,7 +616,13 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     return st.engine !== null && st.enabled && typeof url === 'string' && /^https?:/.test(url) && isActiveFor(url);
   }
 
-  function onCosmetics(event, url, msg) {
+  // The page is the frame that asked, as the main process sees it: the URL in
+  // the message is the renderer's word, and the frame may have navigated (or
+  // be gone) since. Top frames only: the styles go to the whole tab.
+  function onCosmetics(event, _claimedUrl, msg) {
+    const frame = event.senderFrame;
+    if (!frame || frame.parent) return;
+    const url = frame.url;
     if (!cosmeticsWanted(url)) return;
     const { hostname, domain } = tldts.parse(url);
     const first = msg === undefined || msg === null;
@@ -637,8 +645,7 @@ function createAdblock({ cacheDir, settings = null, ...opts } = {}) {
     if (scripts.length > 0) {
       // To the frame that asked (not the tab's current main frame), and
       // without a user gesture.
-      const target = event.senderFrame || wc;
-      Promise.resolve(target.executeJavaScript(wrapScriptlets(scripts), false)).catch(() => {});
+      Promise.resolve(frame.executeJavaScript(wrapScriptlets(scripts), false)).catch(() => {});
     }
   }
 
