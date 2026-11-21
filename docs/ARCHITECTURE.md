@@ -63,7 +63,9 @@ src/pages/                  internal pages: settings, error
 tools/build.mjs             esbuild: bundles the preloads into dist/preload/
 test/                       node:test unit tests
 bench/                      the measurements behind every efficiency claim
-packaging/                  launcher, .desktop, Arch PKGBUILD
+packaging/supernova         the /usr/bin launcher (unsets ELECTRON_RUN_AS_NODE)
+packaging/supernova.desktop the desktop entry: web browser, New Window, New Private Window
+packaging/arch/PKGBUILD     the Arch package; check() runs the unit tests and tools/smoke.sh
 ```
 
 Preloads run sandboxed, so they cannot `require` local files at run time:
