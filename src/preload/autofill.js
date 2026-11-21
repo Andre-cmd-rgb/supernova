@@ -1,5 +1,5 @@
 'use strict';
-// Password autofill, page side (agent A).
+// Password autofill, page side.
 //
 // Runs in the isolated world of every frame, bundled into the sandboxed page
 // preload: plain JS and DOM only, ipcRenderer is passed in. Page scripts

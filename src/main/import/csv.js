@@ -1,5 +1,5 @@
 'use strict';
-// Import passwords from a CSV export (agent A).
+// Import passwords from a CSV export.
 // Google Password Manager / Chrome: name,url,username,password,note
 // Also understood: Firefox (url,username,password,...,timePasswordChanged),
 // Bitwarden (login_uri,login_username,login_password,type), and the common

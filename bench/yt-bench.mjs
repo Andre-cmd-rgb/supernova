@@ -100,11 +100,18 @@ async function connect(t) {
   const ws = new WebSocket(t.webSocketDebuggerUrl);
   await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
   let id = 0;
-  const evaluate = (expression) => new Promise((res) => {
+  // A reply that never comes (the page went away under the socket) would
+  // leave nothing pending, and Node would quietly exit 0: time out instead.
+  const evaluate = (expression) => new Promise((res, rej) => {
     const my = ++id;
+    const timer = setTimeout(() => {
+      ws.removeEventListener('message', h);
+      rej(new Error(`no reply in 30 s to: ${expression.slice(0, 80)}`));
+    }, 30000);
     const h = (ev) => {
       const m = JSON.parse(ev.data);
       if (m.id !== my) return;
+      clearTimeout(timer);
       ws.removeEventListener('message', h);
       res(m.result && m.result.result ? m.result.result.value : undefined);
     };
@@ -182,4 +189,6 @@ async function main() {
   await sleep(1500);
 }
 
-main().catch((err) => { console.error(err); process.exit(1); });
+let finished = false;
+process.on('beforeExit', () => { if (!finished) { console.error(`${label}: stopped before a result`); process.exit(1); } });
+main().then(() => { finished = true; }, (err) => { console.error(err); process.exit(1); });

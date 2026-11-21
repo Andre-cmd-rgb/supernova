@@ -1,5 +1,5 @@
 'use strict';
-// History store (agent A). Pure Node: no electron here.
+// History store. Pure Node: no electron here.
 //
 // One JSON file (dir/history.json), loaded once, kept in memory, written
 // atomically on a single-shot debounce. search() runs on every keystroke in the

@@ -1,5 +1,5 @@
 'use strict';
-// Ad and tracker blocking (agent B), built on @ghostery/adblocker-electron:
+// Ad and tracker blocking, built on @ghostery/adblocker-electron:
 // its filter engine and its cosmetic-filtering preload. The session wiring is
 // our own because the library's enableBlockingInSession() registers global
 // ipcMain handlers per session (a second session throws), has no per-site

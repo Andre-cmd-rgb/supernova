@@ -1,7 +1,6 @@
 'use strict';
-// Import from Chrome / Chromium / Brave / Vivaldi / Edge profiles on Linux
-// (agent A). No electron here: vault, stores, cookies and secretLookup are
-// injected.
+// Import from Chrome / Chromium / Brave / Vivaldi / Edge profiles on Linux.
+// No electron here: vault, stores, cookies and secretLookup are injected.
 //
 // SQLite files are read through the sqlite3 CLI (-json) on a private copy in
 // a temp dir, because the browser may be running and holding a lock.

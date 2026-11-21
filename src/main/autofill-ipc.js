@@ -1,5 +1,5 @@
 'use strict';
-// Password autofill, main side (agent A). ipcMain, vault, settings and
+// Password autofill, main side. ipcMain, vault, settings and
 // promptSave are injected; nothing here requires electron.
 //
 // The origin is always the sender frame's real origin (event.senderFrame),

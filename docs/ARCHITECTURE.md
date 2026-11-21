@@ -4,12 +4,13 @@ Supernova is a browser for Linux (Wayland first, built for Nova) that puts nothi
 between you and the page. It runs on **castlabs' Electron for Content Security**
 (upstream Electron plus Google's licensed Widevine), pinned in `electron.lock`.
 
-Why Electron and not Qt WebEngine: measured on a ThinkPad P1 Gen 4i (3840x2400),
-1080p30 AV1 in a YouTube-like page, Qt WebEngine drew every video frame twice
-(its own pass plus Qt's) and made Hyprland redraw the whole window: **0.93 W of
-GPU power against Chrome's 0.28 W**. Electron uses Chromium's own Wayland path,
-so it matches Chrome on the GPU (0.28 W) while using a third less memory
-(306 MiB against 483 MiB) and less CPU. See `bench/README.md`.
+Why Electron and not Qt WebEngine: in an early test on a ThinkPad P1 Gen 4i
+(3840x2400), with 1080p30 AV1 in a YouTube-like page, Qt WebEngine drew every
+video frame twice (its own pass plus Qt's) and made Hyprland redraw the whole
+window: **0.93 W of GPU power against Chrome's 0.28 W**. Electron uses
+Chromium's own Wayland path and video pipeline, so it costs what Chrome costs.
+Measurements of the finished browser against Chrome on real YouTube are in
+`bench/README.md`.
 
 ## Rules for all code
 
@@ -25,8 +26,11 @@ so it matches Chrome on the GPU (0.28 W) while using a third less memory
   blocking, so no synchronous disk I/O after startup (use `fs.promises`), no
   heavy loops.
 - Pure logic lives in modules that do not `require('electron')` at the top, so
-  `node --test test/` can test them with plain Node. Electron objects are passed
-  in (dependency injection).
+  `npm test` can test them with plain Node. Electron objects are passed in
+  (dependency injection). `npm test` is `tools/test.sh`: every
+  `test/*.test.js` under `env -i`, with a throwaway HOME and XDG dirs and a
+  D-Bus address that leads nowhere, so no test can read or write the user's
+  profile, keyring or session bus.
 - Data lives in `app.getPath('userData')` (`~/.config/supernova`). Writes are
   atomic (write `file.tmp`, then rename).
 
@@ -46,26 +50,34 @@ src/main/permissions.js     permission prompts and remembered decisions
 src/main/protocol.js        supernova:// internal pages
 src/main/url.js             input -> URL or Google search (pure)
 src/main/search.js          Google suggestions
-src/main/history.js         history store            (agent A)
-src/main/bookmarks.js       bookmarks store          (agent A)
-src/main/passwords.js       password vault           (agent A)
-src/main/autofill-ipc.js    password autofill, main side (agent A)
-src/main/import/chrome.js   import from Chrome/Chromium/Brave profiles (agent A)
-src/main/import/csv.js      import Google Password Manager CSV (agent A)
-src/main/adblock.js         ad and tracker blocking    (agent B)
-src/main/media-policy.js    video quality / frame-rate policy per power source (agent B)
+src/main/power.js           battery or mains (powerMonitor; SUPERNOVA_FORCE_BATTERY=1|0)
+src/main/history.js         history store
+src/main/bookmarks.js       bookmarks store
+src/main/passwords.js       password vault
+src/main/autofill-ipc.js    password autofill, main side
+src/main/import/chrome.js   import from Chrome/Chromium/Brave profiles
+src/main/import/csv.js      import Google Password Manager CSV
+src/main/adblock.js         ad and tracker blocking
+src/main/media-policy.js    video quality / frame-rate policy per power source
 src/preload/page-preload.js preload for every web page frame (bundled to dist/)
-src/preload/autofill.js     password autofill, page side (agent A; imported by page-preload)
-src/preload/media-shim.js   main-world shim: quality caps + rAF throttle (agent B)
+src/preload/autofill.js     password autofill, page side (imported by page-preload)
+src/preload/media-shim.js   main-world shim: quality caps + rAF throttle
 src/preload/ui-preload.js   preload for the browser UI (exposes window.sn)
 src/ui/                     the browser UI (sidebar / top bar, command bar, prompts)
 src/pages/                  internal pages: settings, error
 tools/build.mjs             esbuild: bundles the preloads into dist/preload/
+tools/fetch-electron.sh     downloads and checks the castlabs build electron.lock pins
+tools/run-dev.sh            runs the source tree on that build
+tools/test.sh               npm test: the unit tests in a clean environment
+tools/smoke.sh              starts a build headless and checks it (CI, PKGBUILD check())
+tools/lint-packaging.sh     shellcheck, actionlint, desktop entry, PKGBUILD vs electron.lock
+tools/cdp.mjs               evaluates JS in a running instance over the DevTools protocol
 test/                       node:test unit tests
 bench/                      the measurements behind every efficiency claim
 packaging/supernova         the /usr/bin launcher (unsets ELECTRON_RUN_AS_NODE)
 packaging/supernova.desktop the desktop entry: web browser, New Window, New Private Window
 packaging/arch/PKGBUILD     the Arch package; check() runs the unit tests and tools/smoke.sh
+.github/workflows/ci.yml    CI: lint, tests and smoke from source; makepkg, install, smoke
 ```
 
 Preloads run sandboxed, so they cannot `require` local files at run time:
@@ -121,7 +133,7 @@ Settings keys (defaults):
 | `downloads.dir` | `""` | empty = XDG download dir |
 | `permissions` | `{}` | `"<origin>": { "<permission>": "allow" \| "deny" }` |
 
-## Agent A: data, passwords, import
+## Data: history, bookmarks, passwords, import
 
 ### History (`src/main/history.js`)
 
@@ -230,7 +242,7 @@ databases with `meta.version >= 24` prepend SHA-256(host_key) (32 bytes) to the
 plaintext; strip it. Chrome times are microseconds since 1601-01-01.
 **Never log or print secrets**, not even in tests' failure messages.
 
-## Agent B: ad blocking and media policy
+## Ad blocking and media policy
 
 ### Ad blocking (`src/main/adblock.js`)
 
@@ -270,31 +282,98 @@ time. Behaviour: `test/adblock.test.js`; cost: `bench/adblock-cost.mjs`
 
 - `src/main/media-policy.js`:
   `createMediaPolicy({ settings, power })` ->
-  `{ current() -> { maxHeight, maxFps, rafFps }, on('change', fn) }`.
+  `{ current() -> { battery, maxHeight, maxFps, rafFps }, on('change', fn), off, close }`.
   `maxHeight` 0 = no cap; `maxFps` 0 = no cap; `rafFps` 0 = no throttle.
-  On battery: `maxHeight = video.maxHeightOnBattery`,
-  `maxFps = prefer30fps ? 30 : 0`, `rafFps = animations.limitOnBattery ? 30 : 0`.
-  On AC: `video.maxHeightOnAC`, 0, 0.
+  On battery: `maxHeight = video.maxHeightOnBattery` (a cap under 480 becomes
+  480), `maxFps = video.prefer30fpsOnBattery ? 30 : 0`,
+  `rafFps = animations.limitOnBattery === false ? 0 : 30`.
+  On AC: `video.maxHeightOnAC`, 0, 0. `'change'` fires only when one of these
+  values actually changes (a power or settings event that changes nothing is
+  not pushed to pages).
 - `src/preload/media-shim.js` exports `applyMediaShim(config)`: a **self-contained
   function** (no closure variables, no imports; it is serialized and run in the
-  page's main world with `contextBridge.executeInMainWorld`). It may be called
-  again with a new config: keep state on a hidden global (e.g. a Symbol on
-  `window`) and only install wrappers once.
-  - Wrap `MediaSource.isTypeSupported`, `ManagedMediaSource.isTypeSupported`
-    if present, and `navigator.mediaCapabilities.decodingInfo` so that video
-    types whose `height`/`width` (YouTube passes `width=`, `height=`,
-    `framerate=` in the type string; decodingInfo has `video.height`,
-    `video.framerate`) exceed the cap are reported unsupported. Never touch
-    audio-only types. Never reject the lowest tiers (<= 480p).
-  - `rafFps`: wrap `requestAnimationFrame`/`cancelAnimationFrame` so callbacks
-    run at most `rafFps` times a second, timestamps stay monotonic and
-    cancellation works. Off (`rafFps` 0) must mean the original functions.
-  - Must not be detectable as broken by sites (keep `toString` reasonable,
-    keep `this` binding and return types).
-- The core's page preload calls it at document start:
+  page's main world with `contextBridge.executeInMainWorld`). Calling it again
+  updates the caps: the state lives on `globalThis[Symbol.for('supernova.media')]`
+  and the wrappers are installed once.
+  - `MediaSource.isTypeSupported`, `ManagedMediaSource.isTypeSupported` and
+    `MediaCapabilities.prototype.decodingInfo` report video formats over the
+    cap as unsupported (decodingInfo resolves `{ supported: false }` without
+    asking the browser). With both width and height known the comparison is by
+    pixel count (`maxHeight^2 * 16/9`, 10% slack), so a portrait 1080p stream
+    is a 1080p stream; with one of them, by tier. The browser keeps the last
+    word on everything under the cap. Audio types are never touched, and 480p
+    and lower are never hidden, so a site always has something to play.
+  - `rafFps`: `requestAnimationFrame`/`cancelAnimationFrame` (and the `webkit`
+    names) run callbacks at most `rafFps` times a second. A single-shot timer
+    waits until the next frame is due, then one real rAF runs the whole batch
+    with the browser's vsync timestamp, so animations stay monotonic and on
+    vsync. Throttled ids start at `0x40000000`, so cancelling works across a
+    switch; with `rafFps` 0 calls go straight to the browser.
+  - Every wrapper is a `Proxy` of the original: same `name`, `length`,
+    `toString` and `this` handling, nothing new on `window`.
+- The page preload calls it at document start:
   `const cfg = ipcRenderer.sendSync('sn:media:config')` then
   `contextBridge.executeInMainWorld({ func: applyMediaShim, args: [cfg] })`,
-  and again on `ipcRenderer.on('sn:media:config', (_, cfg) => ...)`.
+  and again on every `sn:media:config` the main process pushes to every frame
+  when the policy changes.
+- Measured: the caps cost nothing on AC (all 0) and the rAF throttle halves
+  animation frames on battery; YouTube's 1080p60 stream on battery costs what
+  it costs on AC (`bench/README.md`).
+
+## Window, input and startup
+
+### Window (`src/main/window.js`)
+
+One `BaseWindow` holds `WebContentsView`s: the **UI view** (sidebar or top
+bar, command bar), the active tab's view, and the **float view**, which draws
+over the page what must sit above it: permission and save-password prompts,
+the find bar, download toasts. The float view is a whole renderer (~22 MiB), so
+it exists only while something needs it: it is created on first use, hidden
+when nothing is shown, and closed after 30 s with nothing in it
+(`FLOAT_IDLE_MS`). Messages sent while it is starting are queued, and a focus
+request made while it is hidden (find opened with Ctrl+F) is applied when it
+is shown. Hidden tabs are frozen and later discarded on the timers in
+`tabs.freezeAfterMin` / `tabs.discardAfterMin`.
+
+### Address input (`src/main/url.js`)
+
+`fixupNav(input)` -> `{ url, upgraded }`: a URL is opened as typed; a bare host
+gets `https://` (`upgraded: true`), except local-network hosts (`localhost`,
+IP addresses, `name:port`, and the `.local`, `.lan`, `.home`, `.internal`,
+`.home.arpa` and similar suffixes) and hosts with a port other than 443, which
+get `http://`. Anything else, a bare single word included, is a Google
+search. When an upgraded address fails to load, the tab retries it once over
+http, as Chrome's HTTPS upgrades do, so a device with no TLS still opens; not
+when the load was stopped (-3), the name does not resolve (-105, -137), the
+machine is offline (-106) or the network changed (-21).
+
+### Theme (`src/main/theme.js`)
+
+Colours come from the current Nova theme,
+`$XDG_STATE_HOME/nova/current/theme/` (`supernova.json` if the theme has one,
+else `colors.toml`; `SUPERNOVA_THEME=<file>` overrides), and fall back to
+built-in light and dark palettes. Nova switches themes by swapping a symlink;
+the watch follows that and in-place rewrites, and the UI recolours live. A theme without `mode` is
+dark when its background's relative luminance is under 0.3, else light; with
+no background either, the desktop's colour-scheme preference decides.
+
+### Chromium switches (`src/main/flags.js`)
+
+Wayland (Ozone), VA-API decoding with zero copy, the PipeWire screen capturer,
+`BackgroundVideoTrackOptimization` (a hidden video stops decoding; audio plays
+on), the integrated GPU's render node so a discrete NVIDIA card stays asleep,
+`gnome-libsecret` for the password key, and no crash reports, metrics or
+pings. `SUPERNOVA_EXTRA_FEATURES=A,B` appends features for experiments
+(`bench/yt-bench.mjs --features`).
+
+### Smoke mode
+
+With `SUPERNOVA_SMOKE=1` the browser checks itself at startup: it opens the
+settings page, waits for the page preload's internal API (`info`) and the UI
+view's `window.sn`, prints `supernova: smoke ok {...}` and exits 0, or prints
+`supernova: smoke FAILED <why>` and exits 1. `tools/smoke.sh` runs it headless
+with a throwaway profile and an empty environment, in CI and in the PKGBUILD's
+`check()`.
 
 ## IPC between the UI view and the main process (core)
 

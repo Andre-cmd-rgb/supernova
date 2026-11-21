@@ -1,5 +1,5 @@
 'use strict';
-// Bookmarks store (agent A). Pure Node: no electron here.
+// Bookmarks store. Pure Node: no electron here.
 // File: dir/bookmarks.json, atomic writes on a short single-shot debounce.
 
 const fsp = require('node:fs/promises');

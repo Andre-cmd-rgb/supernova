@@ -1,5 +1,5 @@
 'use strict';
-// Password vault (agent A). Pure Node: safeStorage is injected.
+// Password vault. Pure Node: safeStorage is injected.
 //
 // The whole vault is one JSON blob encrypted with safeStorage.encryptString
 // (file: dir/passwords.vault). Nothing here ever logs a password; error
