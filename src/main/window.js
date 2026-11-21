@@ -505,8 +505,15 @@ class SnWindow extends EventEmitter {
     wc.on('context-menu', (_e, params) => this._contextMenu(tab, params));
     wc.setWindowOpenHandler((details) => this._windowOpen(tab, details));
     // What a page starts itself, in any frame: never supernova:// or file://
-    // from the web (url.js mayOpen). A redirect there is never legitimate.
-    wc.on('will-frame-navigate', (e) => { if (!mayOpen(wc.getURL(), e.url)) e.preventDefault(); });
+    // from the web (url.js mayOpen), judged by the frame that started it, not
+    // by what the tab shows now. With no initiating frame (a file dropped on
+    // the page) a file:// target is the user's own doing; supernova:// is
+    // reached only by typing it. A redirect there is never legitimate.
+    wc.on('will-frame-navigate', (e) => {
+      let from = '';
+      try { from = e.initiator ? e.initiator.url : (/^file:/i.test(e.url) ? 'file:' : ''); } catch {}
+      if (!mayOpen(from, e.url)) e.preventDefault();
+    });
     wc.on('will-redirect', (e) => { if (!mayOpen('', e.url)) e.preventDefault(); });
     wc.on('enter-html-full-screen', () => this.setHtmlFullscreen(true));
     wc.on('leave-html-full-screen', () => this.setHtmlFullscreen(false));

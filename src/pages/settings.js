@@ -31,9 +31,19 @@ document.addEventListener('change', async (e) => {
   const key = el.dataset.setting;
   let value = el.type === 'checkbox' ? el.checked : el.value;
   if (el.dataset.number !== undefined || el.type === 'number') value = Number(value) || 0;
-  if (el.dataset.sub) value = { ...(settings[key] || {}), [el.dataset.sub]: Math.max(0, Number(el.value) || 0) };
-  await api('setSetting', key, value);
-  settings[key] = value;
+  if (el.dataset.sub) {
+    const max = Number(el.max) || Infinity;
+    const n = Math.min(max, Math.max(0, Math.round(Number(el.value) || 0)));
+    el.value = String(n);
+    value = { ...(settings[key] || {}), [el.dataset.sub]: n };
+  }
+  try {
+    await api('setSetting', key, value);
+    settings[key] = value;
+  } catch (err) {
+    alert(`Not saved: ${err.message}`);
+    loadSettings();
+  }
 });
 
 function renderAllowlist() {
@@ -47,8 +57,12 @@ document.addEventListener('click', async (e) => {
   if (!a) return;
   e.preventDefault();
   const list = (settings['adblock.allowlist'] || []).filter((h) => h !== a.dataset.unallow);
-  await api('setSetting', 'adblock.allowlist', list);
-  settings['adblock.allowlist'] = list;
+  try {
+    await api('setSetting', 'adblock.allowlist', list);
+    settings['adblock.allowlist'] = list;
+  } catch (err) {
+    alert(`Not saved: ${err.message}`);
+  }
   renderAllowlist();
 });
 

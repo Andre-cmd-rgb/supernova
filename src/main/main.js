@@ -122,6 +122,8 @@ const ctx = {
         title: 'Leave site?', message: 'Leave site?', detail: 'Changes you made may not be saved.',
       });
       if (choice === 0) e.preventDefault();
+      // Staying cancels a quit in progress: the next one starts over.
+      else { quitting = false; flushedForQuit = false; }
     });
   },
   pendingPrompts(tab) {
@@ -654,6 +656,10 @@ async function smokeTest() {
     await sleep(500);
     if (!pwc.getURL().startsWith('data:')) return fail(`a web page navigated itself to ${pwc.getURL()}`);
     if (popup !== false) return fail('a web page opened supernova://settings with window.open');
+    await pwc.executeJavaScript('const f = document.createElement("iframe"); f.src = "supernova://settings/"; document.body.append(f); 1').catch(() => null);
+    await sleep(500);
+    const inner = pwc.mainFrame.frames.map((f) => f.url).filter((u) => u.startsWith('supernova:'));
+    if (inner.length) return fail(`a web page framed ${inner[0]}`);
     clearTimeout(timer);
     console.log(`supernova: smoke ok ${JSON.stringify({
       version: info.version, electron: info.electron, chrome: info.chrome, vault: info.vault && info.vault.backend,

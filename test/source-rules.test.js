@@ -28,7 +28,8 @@ test('every blocking call in the main process says why it may block', () => {
   for (const file of sources(MAIN)) {
     const lines = fs.readFileSync(file, 'utf8').split('\n');
     lines.forEach((line, i) => {
-      const code = line.replace(/\/\/.*$/, '');
+      // String literals out first, so 'file://' + fs.fooSync() is still code.
+      const code = line.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g, "''").replace(/\/\/.*$/, '');
       if (!/\b\w+Sync\s*\(/.test(code)) return;
       if (/^\s*(async\s+)?\w+Sync\s*\([^)]*\)\s*\{/.test(code)) return; // a method named *Sync
       if (/sync-ok:\s*\S/.test(line) || /sync-ok:\s*\S/.test(lines[i - 1] || '')) return;

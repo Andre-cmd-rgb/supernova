@@ -191,8 +191,7 @@ class Tab extends EventEmitter {
     this._timers = [];
   }
 
-  // Busy tabs are neither frozen nor discarded. `edited`: the user typed into
-  // this page (the page preload reports it), and a discard would lose it.
+  // Busy tabs are neither frozen nor discarded.
   _busy() {
     return this.audible || this.playing || this.capturing || this.loading || this.pinned ||
       (this.live && this.view.webContents.isCurrentlyAudible());
@@ -224,6 +223,8 @@ class Tab extends EventEmitter {
     }
   }
 
+  // Not a tab the user typed text into (`edited`, from the page preload,
+  // cleared when it navigates): it may be frozen, but a discard loses the text.
   discard() {
     if (!this.live || this._visible || this._busy() || this.edited) return;
     this._clearTimers();

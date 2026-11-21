@@ -5,7 +5,6 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 
 const PAGES = path.join(__dirname, '..', 'pages');
-const SHARED = path.join(__dirname, '..', 'ui');
 
 // Each host serves its own page and files, nothing else: the API a page gets
 // is decided by its host (internalAllowed), so supernova://settings/error.html
@@ -28,7 +27,8 @@ const API = {
 function internalAllowed(senderUrl, name) {
   let u;
   try { u = new URL(senderUrl); } catch { return false; }
-  if (u.protocol !== 'supernova:' || !ROUTES[u.hostname] || !(u.pathname === '/' || u.pathname === '')) return false;
+  if (u.protocol !== 'supernova:' || !Object.prototype.hasOwnProperty.call(ROUTES, u.hostname)) return false;
+  if (!(u.pathname === '/' || u.pathname === '')) return false;
   if (u.username || u.password || u.port) return false;
   const allowed = API[u.hostname];
   return allowed === null || allowed.has(name);
@@ -54,9 +54,6 @@ function handlerFor(net) {
     if (!route) return new Response('Not found', { status: 404 });
     if (!rel || rel === 'index.html') {
       file = path.join(PAGES, route.page);
-    } else if (rel.startsWith('shared/')) {
-      file = path.join(SHARED, rel.slice(7));
-      if (!file.startsWith(SHARED + path.sep)) return new Response('Not found', { status: 404 });
     } else if (route.files.includes(rel)) {
       file = path.join(PAGES, rel);
     } else {

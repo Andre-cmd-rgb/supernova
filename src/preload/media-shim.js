@@ -110,7 +110,7 @@ function applyMediaShim(config) {
   }
 
   // Replace obj[name] (found on obj or its prototype chain) by a Proxy of the
-  // original: same name, length, toString and descriptor.
+  // original: same name, length and descriptor, and a native-looking toString.
   function wrap(obj, name, makeTrap) {
     let owner = obj;
     while (owner && !Object.prototype.hasOwnProperty.call(owner, name)) owner = Object.getPrototypeOf(owner);

@@ -51,7 +51,7 @@ test('each host serves its own page and files, and nothing else', async () => {
   assert.equal(await get('supernova://settings/pages.css'), 'pages.css');
   assert.equal(await get('supernova://error/'), 'error.html');
   assert.equal(await get('supernova://error/error.js'), 'error.js');
-  assert.equal(await get('supernova://settings/shared/icons.js'), 'icons.js');
+  assert.equal(await get('supernova://settings/shared/icons.js'), 404, 'the browser UI is not an internal page');
   assert.equal(await get('supernova://settings/error.html'), 404);
   assert.equal(await get('supernova://settings/error.js'), 404);
   assert.equal(await get('supernova://error/settings.html'), 404);
@@ -69,6 +69,14 @@ test('a web page can open neither internal pages nor local files', () => {
   assert.equal(mayOpen(web, ' supernova://settings/'), false);
   assert.equal(mayOpen(web, 'file:///home/user/.ssh/id_ed25519'), false);
   assert.equal(mayOpen(web, 'javascript:alert(1)'), false);
+  assert.equal(mayOpen(web, 'view-source:file:///etc/passwd'), false);
+  assert.equal(mayOpen(web, 'view-source:supernova://settings/'), false);
+  assert.equal(mayOpen(web, 'blob:supernova://settings/x'), false);
+  assert.equal(mayOpen(web, 'filesystem:file:///x'), false);
+  assert.equal(mayOpen(web, 'view-source:view-source:view-source:view-source:view-source:https://x/'), false);
+  assert.equal(mayOpen(web, 'view-source:https://example.com/'), true);
+  assert.equal(mayOpen(web, 'blob:https://evil.example/1234'), true);
+  assert.equal(mayOpen('view-source:supernova://settings/', 'supernova://settings/'), true);
   assert.equal(mayOpen('', 'supernova://settings/'), false, 'a fresh tab its opener drives');
   assert.equal(mayOpen('about:blank', 'supernova://settings/'), false);
   assert.equal(mayOpen('', 'file:///etc/passwd'), false, 'redirects (no page) never reach them');

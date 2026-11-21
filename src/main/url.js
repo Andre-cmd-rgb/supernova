@@ -114,10 +114,22 @@ const schemeOf = (url) => {
  * What the user types in the command bar does not go through here.
  */
 function mayOpen(from, to) {
-  const target = schemeOf(to);
+  const target = innerScheme(to);
   if (target === 'javascript') return false;
-  if (target === 'supernova' || target === 'file') return schemeOf(from) === target;
+  if (target === 'supernova' || target === 'file') return innerScheme(from) === target;
   return true;
+}
+
+// The scheme that decides: view-source:, blob: and filesystem: wrap another
+// URL (view-source:file:///etc/passwd is a file).
+function innerScheme(url) {
+  let rest = String(url || '').trim();
+  for (let i = 0; i < 4; i++) {
+    const s = schemeOf(rest);
+    if (s !== 'view-source' && s !== 'blob' && s !== 'filesystem') return s;
+    rest = rest.slice(s.length + 1).trim();
+  }
+  return 'javascript'; // nested deeper than any real URL: refuse
 }
 
 module.exports = { fixup, fixupNav, searchUrl, displayHost, searchQueryOf, originOf, mayOpen };

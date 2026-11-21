@@ -33,10 +33,16 @@ if (window === window.top) {
 
 if (web) {
   try { installAutofill({ ipcRenderer }); } catch {}
-  // The user typed into this page (any frame): the tab is then never
-  // discarded, which would lose the text. Told once per document.
+  // The user typed text into this page (any frame): the tab is then not
+  // discarded until it navigates, which would lose the text (Chrome keeps
+  // tabs with form input the same way). Checkboxes, selects and search
+  // boxes do not count. Told once per document.
+  const TEXT = /^(text|email|password|tel|url|number|)$/;
   const typed = (e) => {
-    if (!e.isTrusted) return;
+    const t = e.target;
+    if (!e.isTrusted || !t) return;
+    const text = t.isContentEditable || t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && TEXT.test(t.type || ''));
+    if (!text) return;
     window.removeEventListener('input', typed, true);
     ipcRenderer.send('sn:edited');
   };

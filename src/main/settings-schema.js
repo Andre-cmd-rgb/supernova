@@ -32,7 +32,9 @@ const oneOf = (...values) => (v) => values.includes(v);
 const minutes = (max) => (v) => !!v && typeof v === 'object' && !Array.isArray(v) &&
   Object.keys(v).every((k) => k === 'ac' || k === 'battery') &&
   ['ac', 'battery'].every((k) => Number.isInteger(v[k]) && v[k] >= 0 && v[k] <= max);
-const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/i;
+// A site as the sidebar's shield stores it (adblock.js siteOf): a host name,
+// which can also be an IPv6 address or have an underscore.
+const SITE = /^[^\s/\\?#@]{1,253}$/;
 
 const WRITABLE = {
   'tabs.position': oneOf('left', 'top'),
@@ -40,7 +42,7 @@ const WRITABLE = {
   'search.suggestions': bool,
   'adblock.enabled': bool,
   'adblock.cookieBanners': bool,
-  'adblock.allowlist': (v) => Array.isArray(v) && v.length <= 10000 && v.every((h) => typeof h === 'string' && HOST.test(h)),
+  'adblock.allowlist': (v) => Array.isArray(v) && v.length <= 10000 && v.every((h) => typeof h === 'string' && SITE.test(h)),
   'video.maxHeightOnBattery': oneOf(0, 720, 1080, 1440),
   'video.maxHeightOnAC': oneOf(0, 1080, 1440, 2160),
   'video.prefer30fpsOnBattery': bool,

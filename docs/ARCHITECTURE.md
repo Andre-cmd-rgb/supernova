@@ -365,23 +365,26 @@ request made while it is hidden (find opened with Ctrl+F) is applied when it
 is shown. Each tab's prompts stay pending while another tab is shown, and the
 UI shows only the active tab's. Hidden tabs are frozen and later discarded on
 the timers in `tabs.freezeAfterMin` / `tabs.discardAfterMin`; tabs that play
-or capture are left alone, and so is a tab the user typed into (the page
-preload reports the first trusted `input` event, `sn:edited`), until it
-navigates, because a discard would lose the text. A private window's UI uses
+or capture are left alone. A tab the user typed text into (the page preload
+reports the first trusted `input` event in a text field, textarea or editable
+element, `sn:edited`) may be frozen but is not discarded until it navigates,
+because a discard would lose the text; Chrome keeps tabs with form input the
+same way. A private window's UI uses
 the private session, so the favicons it shows leave nothing behind.
 
 ### Internal pages (`src/main/protocol.js`)
 
 `supernova://settings` and `supernova://error` are served from `src/pages`;
-each host serves only its own page and files. `internalAllowed(url, name)`
+each host serves only its own page, script and `pages.css`, nothing else. `internalAllowed(url, name)`
 decides what `window.supernova.invoke()` may call, from the calling frame's
 own URL (top frame only): the settings page (path `/`) the whole API, the
 error page only `theme`. A web page cannot get there: `mayOpen(from, to)` in
 `url.js` refuses `supernova:` and `file:` targets unless the page is one
-itself, and `window.js` applies it to every navigation a page starts
-(`will-frame-navigate`), to redirects, `window.open` and the context menu.
-The error page retries only http(s) addresses. Smoke mode checks that a page
-cannot navigate itself there.
+itself, and `window.js` applies it to every cross-document navigation a page
+starts (`will-frame-navigate`, judged by the frame that started it; a file
+dropped on the page may open), to redirects, `window.open` and the context
+menu. The error page retries only http(s) addresses. Smoke mode checks that a
+page can neither navigate itself there, nor open it, nor frame it.
 
 ### Address input (`src/main/url.js`)
 
@@ -420,8 +423,8 @@ With `SUPERNOVA_SMOKE=1` the browser checks itself at startup: it opens the
 settings page, waits for the page preload's internal API (`info`) and the UI
 view's `window.sn`, prints `supernova: smoke ok {...}` and exits 0, or prints
 `supernova: smoke FAILED <why>` and exits 1. It also checks that a web page
-can neither navigate itself to `supernova://settings` nor open it with
-`window.open`. `tools/smoke.sh` runs it headless
+can neither navigate itself to `supernova://settings`, nor open it with
+`window.open`, nor load it in an iframe. `tools/smoke.sh` runs it headless
 with a throwaway profile and an empty environment, in CI and in the PKGBUILD's
 `check()`.
 
