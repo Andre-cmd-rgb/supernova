@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { fixup, displayHost, searchQueryOf, originOf } = require('../src/main/url');
+const { fixup, fixupNav, displayHost, searchQueryOf, originOf } = require('../src/main/url');
 
 const G = 'https://www.google.com/search?q=';
 
@@ -17,6 +17,21 @@ test('local hosts and ports use http', () => {
   assert.equal(fixup('192.168.1.1'), 'http://192.168.1.1/');
   assert.equal(fixup('10.42.0.233:8765/up'), 'http://10.42.0.233:8765/up');
   assert.equal(fixup('intranet:3000'), 'http://intranet:3000/');
+  // Names that exist only on the local network, as typed for a Pi or a NAS.
+  assert.equal(fixup('piserver.local:8319'), 'http://piserver.local:8319/');
+  assert.equal(fixup('nas.lan'), 'http://nas.lan/');
+  assert.equal(fixup('router.home.arpa/admin'), 'http://router.home.arpa/admin');
+  // A port other than 443 is its own service, usually plain http.
+  assert.equal(fixup('example.com:8080'), 'http://example.com:8080/');
+  assert.equal(fixup('example.com:443'), 'https://example.com/');
+});
+
+test('only an https Supernova chose itself falls back to http', () => {
+  assert.deepEqual(fixupNav('neverssl.com'), { url: 'https://neverssl.com/', upgraded: true });
+  assert.deepEqual(fixupNav('https://example.com'), { url: 'https://example.com/', upgraded: false });
+  assert.deepEqual(fixupNav('http://example.com'), { url: 'http://example.com/', upgraded: false });
+  assert.deepEqual(fixupNav('piserver.local:8319'), { url: 'http://piserver.local:8319/', upgraded: false });
+  assert.equal(fixupNav('how tall is everest').upgraded, false);
 });
 
 test('everything else is a Google search', () => {

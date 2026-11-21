@@ -6,7 +6,7 @@
 const { BaseWindow, WebContentsView, Menu, clipboard, shell } = require('electron');
 const { EventEmitter } = require('events');
 const { Tab } = require('./tab');
-const { fixup, displayHost, searchUrl } = require('./url');
+const { fixupNav, displayHost, searchUrl } = require('./url');
 
 const SIDEBAR_W = 240;
 const TOPBAR_H = 40;
@@ -231,10 +231,13 @@ class SnWindow extends EventEmitter {
 
   /** Navigate the active tab, or a new one. `input` is what the user typed. */
   go(input, { newTab = false, background = false } = {}) {
-    const url = fixup(input);
+    const { url, upgraded } = fixupNav(input);
     if (!url) return;
-    if (newTab || !this.active) this.newTab({ url, background });
-    else this.active.navigate(url);
+    const fresh = newTab || !this.active;
+    const tab = fresh ? this.newTab({ url, background }) : this.active;
+    // https chosen by us for a bare address: one fall back to http if it fails.
+    tab.httpFallback = upgraded ? url : null;
+    if (!fresh) tab.navigate(url);
     this.closePalette();
   }
 
@@ -496,10 +499,23 @@ class SnWindow extends EventEmitter {
     wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
       // -3 is "aborted" (the user stopped it, or a download took over).
       if (!isMainFrame || code === -3 || !url || url.startsWith('supernova:')) return;
+      // An address typed without a scheme that we tried as https: try http,
+      // once (not for a name that does not resolve, or when offline).
+      const fb = tab.httpFallback;
+      tab.httpFallback = null;
+      if (fb && url.startsWith('https:') && ![-105, -106, -137, -21].includes(code)) {
+        try {
+          if (new URL(fb).host === new URL(url).host) {
+            wc.loadURL('http:' + url.slice('https:'.length)).catch(() => {});
+            return;
+          }
+        } catch {}
+      }
       const q = new URLSearchParams({ url, code: String(code), desc: desc || '' });
       wc.loadURL(`supernova://error/?${q}`).catch(() => {});
     });
     wc.on('did-navigate', (_e, url) => {
+      tab.httpFallback = null;
       const host = displayHost(url);
       const z = host && ctx.services.settings.get('zoom.perHost')[host];
       wc.setZoomFactor(z || 1);
